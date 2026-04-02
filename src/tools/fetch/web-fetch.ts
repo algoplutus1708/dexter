@@ -57,8 +57,8 @@ Use web_fetch as your FIRST choice whenever you need to read the content of a we
 
 - Interactive pages that require JavaScript rendering, clicking, or form filling (use browser instead)
 - Structured financial data like metrics or estimates (use get_financials instead)
-- Stock or crypto prices (use get_market_data instead)
-- SEC filings content (use read_filings instead)
+- Stock, index, or commodity prices (use get_market_data instead)
+- Official company disclosure content from NSE/BSE/SEBI when read_disclosures is more appropriate
 - When you need to navigate through multiple pages by clicking links (use browser instead)
 
 ## Schema

@@ -7,13 +7,14 @@ import { formatToolResult } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
 import { withTimeout, SUB_TOOL_TIMEOUT_MS } from './utils.js';
 import { FINANCIAL_FORMATTERS } from './formatters.js';
+import { describeIndianTickerFormat } from './india-market.js';
 
 /**
  * Rich description for the get_financials tool.
  * Used in the system prompt to guide the LLM on when and how to use this tool.
  */
 export const GET_FINANCIALS_DESCRIPTION = `
-Intelligent meta-tool for retrieving company financial data. Takes a natural language query and automatically routes to appropriate financial data sources.
+Intelligent meta-tool for retrieving Indian company financial data. Takes a natural language query and automatically routes to appropriate financial data sources.
 
 ## When to Use
 
@@ -28,20 +29,20 @@ Intelligent meta-tool for retrieving company financial data. Takes a natural lan
 
 ## When NOT to Use
 
-- Stock or cryptocurrency prices (use get_market_data instead)
+- Stock, index, or commodity prices (use get_market_data instead)
 - Company news or insider trading activity (use get_market_data instead)
 - General web searches or non-financial topics (use web_search instead)
 - Questions that don't require external financial data (answer directly from knowledge)
 - Non-public company information
 - Real-time trading or order execution
-- Reading SEC filing content (use read_filings instead)
+- Reading exchange or SEBI disclosure content (use read_disclosures instead)
 - Stock screening by criteria (use stock_screener)
 
 ## Usage Notes
 
 - Call ONCE with the complete natural language query - the tool handles complexity internally
-- For comparisons like "compare AAPL vs MSFT revenue", pass the full query as-is
-- Handles ticker resolution automatically (Apple -> AAPL, Microsoft -> MSFT)
+- For comparisons like "compare RELIANCE vs TCS revenue", pass the full query as-is
+- Handles ticker resolution automatically for Indian market identifiers. ${describeIndianTickerFormat()}
 - Handles date inference (e.g., "last quarter", "past 5 years", "YTD")
 - Returns structured JSON data with source URLs for verification
 `.trim();
@@ -87,9 +88,9 @@ Given a user's natural language query about financial data, call the appropriate
 
 ## Guidelines
 
-1. **Ticker Resolution**: Convert company names to ticker symbols:
-   - Apple → AAPL, Tesla → TSLA, Microsoft → MSFT, Amazon → AMZN
-   - Google/Alphabet → GOOGL, Meta/Facebook → META, Nvidia → NVDA
+1. **Ticker Resolution**: Convert company names to Indian market identifiers:
+   - Reliance → RELIANCE.NSE, TCS → TCS.NSE, Infosys → INFY.NSE, HDFC Bank → HDFCBANK.NSE
+   - If the exchange is omitted, default to NSE unless the query clearly specifies BSE
 
 2. **Date Inference**: Use schema-supported filters for date ranges:
    - "last year" → report_period_gte 1 year ago
@@ -98,13 +99,14 @@ Given a user's natural language query about financial data, call the appropriate
    - "YTD" → report_period_gte Jan 1 of current year
 
 3. **Tool Selection**:
-   - For latest financial metrics snapshot (P/E, margins, ROE, EPS, growth rates) → get_financial_metrics_snapshot
+   - For latest financial metrics snapshot (P/E, margins, ROE, EPS, growth rates) → get_key_ratios
    - For historical P/E ratio, historical market cap, valuation metrics over time → get_key_ratios
    - For revenue, earnings, profitability → get_income_statements
-   - For latest earnings release snapshot, EPS/revenue beat-miss, earnings surprises → get_earnings
+   - For latest quarterly/annual results snapshot, beat-miss, and estimate comparisons → get_earnings
    - For debt, assets, equity → get_balance_sheets
    - For cash flow, free cash flow → get_cash_flow_statements
    - For comprehensive analysis → get_all_financial_statements
+   - Assume INR is the default user-facing currency unless the user specifies otherwise
 
 4. **Efficiency**:
    - Prefer specific tools over general ones when possible
@@ -131,7 +133,7 @@ const GetFinancialsInputSchema = z.object({
 export function createGetFinancials(model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: 'get_financials',
-    description: `Intelligent meta-tool for retrieving company financial data. Takes a natural language query and automatically routes to appropriate financial data tools. Use for:
+    description: `Intelligent meta-tool for retrieving Indian company financial data. Takes a natural language query and automatically routes to appropriate financial data tools. Use for:
 - Company financials (income statements, balance sheets, cash flow)
 - Financial metrics and key ratios (P/E ratio, market cap, EPS, dividend yield, ROE, margins)
 - Historical metrics and trend analysis

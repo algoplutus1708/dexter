@@ -5,13 +5,14 @@ import { callLlm } from '../../model/llm.js';
 import { formatToolResult } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
 import { api } from './api.js';
+import { INDIA_DEFAULT_CURRENCY } from './india-market.js';
 
 /**
  * Rich description for the screen_stocks tool.
  * Used in the system prompt to guide the LLM on when and how to use this tool.
  */
 export const SCREEN_STOCKS_DESCRIPTION = `
-Screens for stocks matching financial criteria. Takes a natural language query describing the screening criteria and returns matching tickers with their metric values.
+Screens for Indian stocks matching financial criteria. Takes a natural language query describing the screening criteria and returns matching tickers with their metric values.
 
 ## When to Use
 
@@ -25,7 +26,7 @@ Screens for stocks matching financial criteria. Takes a natural language query d
 
 - Looking up a specific company's financials (use get_financials)
 - Current stock prices or market data (use get_market_data)
-- SEC filing content (use read_filings)
+- Exchange or SEBI disclosure content (use read_disclosures)
 - General web searches (use web_search)
 
 ## Usage Notes
@@ -56,7 +57,7 @@ const ScreenerFilterSchema = z.object({
     operator: z.enum(['gt', 'gte', 'lt', 'lte', 'eq', 'in']).describe('Comparison operator'),
     value: z.union([z.number(), z.string(), z.array(z.number()), z.array(z.string())]).describe('Numeric threshold, string for company fields (sector/industry), or array for "in" operator'),
   })).describe('Array of screening filters to apply'),
-  currency: z.string().default('USD').describe('Currency code (e.g., "USD")'),
+  currency: z.string().default(INDIA_DEFAULT_CURRENCY).describe('Currency code (e.g., "INR")'),
   limit: z.number().default(5).describe('Maximum number of results to return'),
 });
 
@@ -93,8 +94,9 @@ ${escapedMetrics}
    - If the user says "low P/E" without a number, use a sensible threshold (e.g., lt 15)
    - If the user says "high growth" without a number, use a sensible threshold (e.g., gt 0.20)
 5. Set limit to 25 unless the user specifies otherwise
-6. Default currency to USD unless specified
-7. Company fields (sector, industry) use GICS classification and require string values with the "eq" or "in" operator (case-insensitive). Common GICS sectors: Communication Services, Consumer Discretionary, Consumer Staples, Energy, Financials, Health Care, Industrials, Information Technology, Materials, Real Estate, Utilities. Map user intent to the correct GICS value (e.g., "tech stocks" → sector eq "Information Technology", "oil and gas" → industry eq "Oil, Gas & Consumable Fuels")
+6. Default currency to INR unless specified
+7. Treat the universe as Indian listed equities by default (NSE/BSE)
+8. Company fields (sector, industry) use the provider's sector taxonomy and require string values with the "eq" or "in" operator (case-insensitive). Map user intent to the closest available sector or industry value (e.g., "IT stocks" → Information Technology, "private banks" → banking/financials)
 
 Return only the structured output fields.`;
 }
@@ -110,7 +112,7 @@ const ScreenStocksInputSchema = z.object({
 export function createScreenStocks(model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: 'stock_screener',
-    description: `Screens for stocks matching financial criteria. Takes a natural language query and returns matching tickers with metric values. Use for:
+    description: `Screens for Indian stocks matching financial criteria. Takes a natural language query and returns matching tickers with metric values. Use for:
 - Finding stocks by valuation (P/E, P/B, EV/EBITDA)
 - Screening by profitability (margins, ROE, ROA)
 - Filtering by growth rates (revenue, earnings, EPS growth)

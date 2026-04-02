@@ -1,6 +1,5 @@
 # Repository Guidelines
 
-- Repo: https://github.com/virattt/dexter
 - Dexter is a CLI-based AI agent for deep financial research, built with TypeScript, Ink (React for CLI), and LangChain.
 
 ## Project Structure
@@ -55,7 +54,7 @@
 
 - `financial_search`: primary tool for all financial data queries (prices, metrics, filings). Delegates to multiple sub-tools internally.
 - `financial_metrics`: direct metric lookups (revenue, market cap, etc.).
-- `read_filings`: SEC filing reader for 10-K, 10-Q, 8-K documents.
+- `read_disclosures`: India disclosure reader for NSE/BSE/SEBI filings, annual reports, results, and shareholding data.
 - `web_search`: general web search (Exa if `EXASEARCH_API_KEY` set, else Tavily if `TAVILY_API_KEY` set).
 - `browser`: Playwright-based web scraping for reading pages the agent discovers.
 - `skill`: invokes SKILL.md-defined workflows (e.g. DCF valuation). Each skill runs at most once per query.

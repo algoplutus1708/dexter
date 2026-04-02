@@ -4,8 +4,9 @@ import { dexterPath } from '../../utils/paths.js';
 
 const HEARTBEAT_MD_PATH = dexterPath('HEARTBEAT.md');
 
-const DEFAULT_CHECKLIST = `- Major index moves (S&P 500, NASDAQ, Dow) — alert if any move more than 2% in a session
-- Breaking financial news — major earnings surprises, Fed announcements, significant market events`;
+const DEFAULT_CHECKLIST = `- Major index moves (NIFTY 50, SENSEX, NIFTY BANK) — alert if any move more than 2% in a session
+- Breaking financial news — major results surprises, RBI announcements, significant market or policy events
+- Key India-market risk events — SEBI, NSE, BSE, MCX, or government actions that could materially affect listed companies or sectors`;
 
 /**
  * Load .dexter/HEARTBEAT.md content.

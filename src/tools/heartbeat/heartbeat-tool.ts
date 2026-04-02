@@ -19,7 +19,7 @@ When you add items, the heartbeat is automatically enabled in the gateway config
 
 - User asks to add, remove, or change what the heartbeat monitors
 - User asks "what's my heartbeat checking?" or similar
-- User says things like "watch NVDA", "stop checking TSLA", "add a market check"
+- User says things like "watch RELIANCE", "stop checking INFY", "add a market check"
 
 ## Actions
 

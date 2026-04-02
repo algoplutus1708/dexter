@@ -3,13 +3,14 @@ import { z } from 'zod';
 import { api, stripFieldsDeep } from './api.js';
 import { formatToolResult } from '../types.js';
 import { TTL_1H } from './utils.js';
+import { describeIndianTickerFormat, normalizeIndianTicker } from './india-market.js';
 
 const REDUNDANT_INSIDER_FIELDS = ['issuer'] as const;
 
 const InsiderTradesInputSchema = z.object({
   ticker: z
     .string()
-    .describe("The stock ticker symbol to fetch insider trades for. For example, 'AAPL' for Apple."),
+    .describe(`The Indian listed instrument to fetch insider/promoter disclosures for. ${describeIndianTickerFormat()}`),
   limit: z
     .number()
     .default(10)
@@ -38,11 +39,17 @@ const InsiderTradesInputSchema = z.object({
 
 export const getInsiderTrades = new DynamicStructuredTool({
   name: 'get_insider_trades',
-  description: `Retrieves insider trading transactions for a given company ticker. Insider trades include purchases and sales of company stock by executives, directors, and other insiders. This data is sourced from SEC Form 4 filings. Use filing_date filters to narrow down results by date range.`,
+  description: `Retrieves insider and promoter trading disclosures for a given Indian listed company. Depending on the configured provider, this may include SEBI PIT-style disclosures, promoter transactions, or management trades. Use filing_date filters to narrow down results by date range.`,
   schema: InsiderTradesInputSchema,
   func: async (input) => {
+    if (!process.env.INDIA_MARKET_API_KEY && !process.env.FINANCIAL_DATASETS_API_KEY && !process.env.FINANCE_API_BASE_URL && !process.env.INDIA_MARKET_API_BASE_URL) {
+      return formatToolResult({
+        note: 'Structured insider/promoter trade feeds are not configured in no-key mode. Use read_disclosures for official exchange or SEBI disclosure discovery, or add an India-market provider for richer structured data.',
+        ticker: normalizeIndianTicker(input.ticker),
+      }, []);
+    }
     const params: Record<string, string | number | undefined> = {
-      ticker: input.ticker.toUpperCase(),
+      ticker: normalizeIndianTicker(input.ticker),
       limit: input.limit,
       filing_date: input.filing_date,
       filing_date_gte: input.filing_date_gte,

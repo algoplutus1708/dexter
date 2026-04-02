@@ -25,7 +25,7 @@ Turn the research question into 3–5 targeted queries using X operators:
 - **Bearish signal**: keywords like `(overvalued OR bubble OR risk OR concern)`
 - **Bullish signal**: keywords like `(bullish OR upside OR catalyst OR beat)`
 - **News/links**: add `has:links` to surface tweets with sources
-- **Noise reduction**: `-is:reply` to focus on original posts; `-airdrop -giveaway` for crypto topics
+- **Noise reduction**: `-is:reply` to focus on original posts; add domain-specific negative terms to filter spam or low-signal chatter
 
 ### 2. Execute Searches
 

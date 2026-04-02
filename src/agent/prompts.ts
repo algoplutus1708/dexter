@@ -23,7 +23,7 @@ export function getCurrentDate(): string {
     month: 'long',
     day: 'numeric',
   };
-  return new Date().toLocaleDateString('en-US', options);
+  return new Date().toLocaleDateString('en-IN', options);
 }
 
 /**
@@ -154,12 +154,12 @@ STRICT FORMAT - each row must:
 
 | Ticker | Rev    | OM  |
 |--------|--------|-----|
-| AAPL   | 416.2B | 31% |
+| RELIANCE | 10.2T | 17% |
 
 Keep tables compact:
 - Max 2-3 columns; prefer multiple small tables over one wide table
 - Headers: 1-3 words max. "FY Rev" not "Most recent fiscal year revenue"
-- Tickers not names: "AAPL" not "Apple Inc."
+- Tickers not names: "RELIANCE" not "Reliance Industries"
 - Abbreviate: Rev, Op Inc, Net Inc, OCF, FCF, GM, OM, EPS
 - Numbers compact: 102.5B not $102,466,000,000
 - Omit units in cells if header has them`;
@@ -247,6 +247,7 @@ ${toolDescriptions}
 - Only use web_fetch when headlines are insufficient (need quotes, deal specifics, earnings details).
 - Tool results are automatically capped. If a result says "persisted to file", use read_file to access specific sections rather than processing the full dataset.
 - Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
+- Default to Indian market context: NSE/BSE listed equities, MCX commodities, INR currency, and IST market hours unless the user clearly asks for another market.
 
 ${buildSkillsSection()}
 
@@ -280,5 +281,3 @@ ${formatBullets}${tablesSection}${groupContext ? '\n\n' + buildGroupSection(grou
 // ============================================================================
 // User Prompts
 // ============================================================================
-
-

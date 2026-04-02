@@ -39,7 +39,7 @@ const CACHE_DIR = dexterPath('cache');
  * Build a human-readable label for log messages.
  * If params contains a 'ticker' field, includes it for readability.
  * Also appends all other defined params as key=value pairs.
- * Example: "/prices/ (AAPL) interval=day limit=30" or "/search/ query=earnings"
+ * Example: "/prices/ (RELIANCE.NSE) interval=day limit=30" or "/search/ query=quarterly results"
  */
 export function describeRequest(
   endpoint: string,
@@ -61,7 +61,7 @@ export function describeRequest(
  * If params contains a 'ticker' field, it's used as a prefix for human-readable filenames.
  * Resulting path:  {clean_endpoint}/{TICKER_}{hash}.json (if ticker present)
  *                  {clean_endpoint}/{hash}.json (otherwise)
- * Example:         prices/AAPL_a1b2c3d4e5f6.json
+ * Example:         prices/RELIANCE.NSE_a1b2c3d4e5f6.json
  */
 export function buildCacheKey(
   endpoint: string,

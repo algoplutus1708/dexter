@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path';
 import { z } from 'zod';
 import { normalizeE164 } from './utils.js';
 import { dexterPath } from '../utils/paths.js';
+import { INDIA_MARKET_HOURS } from '../tools/finance/india-market.js';
 
 const DEFAULT_GATEWAY_PATH = dexterPath('gateway.json');
 const DmPolicySchema = z.enum(['pairing', 'allowlist', 'open', 'disabled']);
@@ -30,13 +31,13 @@ const HeartbeatConfigSchema = z
   .object({
     enabled: z.boolean().optional().default(false),
     intervalMinutes: z.number().min(5).optional().default(10),
-    // default to NYSE market hours: 9:30 AM - 4:00 PM ET, Mon-Fri
+    // default to Indian cash market hours: 9:15 AM - 3:30 PM IST, Mon-Fri
     activeHours: z
       .object({
-        start: z.string().optional().default('09:30'),
-        end: z.string().optional().default('16:00'),
-        timezone: z.string().optional().default('America/New_York'),
-        daysOfWeek: z.array(z.number().min(0).max(6)).optional().default([1, 2, 3, 4, 5]),
+        start: z.string().optional().default(INDIA_MARKET_HOURS.start),
+        end: z.string().optional().default(INDIA_MARKET_HOURS.end),
+        timezone: z.string().optional().default(INDIA_MARKET_HOURS.timezone),
+        daysOfWeek: z.array(z.number().min(0).max(6)).optional().default([...INDIA_MARKET_HOURS.daysOfWeek]),
       })
       .optional(),
     model: z.string().optional(),
@@ -218,4 +219,3 @@ export function resolveWhatsAppAccount(
     sendReadReceipts: account.sendReadReceipts ?? true,
   };
 }
-

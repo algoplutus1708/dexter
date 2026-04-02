@@ -49,7 +49,7 @@ function getSuppressionState(jobId: string): SuppressionState {
 function isWithinActiveHours(activeHours?: ActiveHours): boolean {
   if (!activeHours) return true;
 
-  const tz = activeHours.timezone ?? 'America/New_York';
+  const tz = activeHours.timezone ?? 'Asia/Kolkata';
   const now = new Date();
 
   const allowedDays = activeHours.daysOfWeek ?? [1, 2, 3, 4, 5];

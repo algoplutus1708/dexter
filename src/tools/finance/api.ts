@@ -1,7 +1,13 @@
 import { readCache, writeCache, describeRequest } from '../../utils/cache.js';
 import { logger } from '../../utils/logger.js';
 
-const BASE_URL = 'https://api.financialdatasets.ai';
+function getBaseUrl(): string {
+  return (
+    process.env.FINANCE_API_BASE_URL ||
+    process.env.INDIA_MARKET_API_BASE_URL ||
+    'https://api.financialdatasets.ai'
+  );
+}
 
 export interface ApiResponse {
   data: Record<string, unknown>;
@@ -41,7 +47,7 @@ export function stripFieldsDeep(value: unknown, fields: readonly string[]): unkn
 }
 
 function getApiKey(): string {
-  return process.env.FINANCIAL_DATASETS_API_KEY || '';
+  return process.env.INDIA_MARKET_API_KEY || process.env.FINANCIAL_DATASETS_API_KEY || '';
 }
 
 /**
@@ -104,7 +110,7 @@ export const api = {
       }
     }
 
-    const url = new URL(`${BASE_URL}${endpoint}`);
+    const url = new URL(`${getBaseUrl()}${endpoint}`);
 
     // Add params to URL, handling arrays
     for (const [key, value] of Object.entries(params)) {
@@ -132,7 +138,7 @@ export const api = {
     body: Record<string, unknown>,
   ): Promise<ApiResponse> {
     const label = `POST ${endpoint}`;
-    const url = `${BASE_URL}${endpoint}`;
+    const url = `${getBaseUrl()}${endpoint}`;
 
     const data = await executeRequest(url, label, {
       method: 'POST',

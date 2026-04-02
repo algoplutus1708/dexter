@@ -16,9 +16,10 @@ function fmtNum(n: unknown): string {
   if (isNaN(num)) return '—';
   const abs = Math.abs(num);
   const sign = num < 0 ? '-' : '';
-  if (abs >= 1e12) return `${sign}${(abs / 1e12).toFixed(1)}T`;
-  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(1)}B`;
-  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(1)}M`;
+  if (abs >= 1e12) return `${sign}${(abs / 1e7).toFixed(0)} Cr`;
+  if (abs >= 1e9) return `${sign}${(abs / 1e7).toFixed(1)} Cr`;
+  if (abs >= 1e7) return `${sign}${(abs / 1e7).toFixed(1)} Cr`;
+  if (abs >= 1e5) return `${sign}${(abs / 1e5).toFixed(1)} L`;
   if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
   return `${sign}${abs.toFixed(0)}`;
 }
@@ -34,7 +35,7 @@ function fmtPrice(n: unknown): string {
   if (n === null || n === undefined) return '—';
   const num = Number(n);
   if (isNaN(num)) return '—';
-  return `$${num.toFixed(2)}`;
+  return `Rs ${num.toFixed(2)}`;
 }
 
 function fmtDate(d: unknown): string {
@@ -233,6 +234,40 @@ export function formatSegmentedRevenues(data: unknown, args?: Rec): string {
   return lines.join('\n');
 }
 
+export function formatOptionContracts(data: unknown): string {
+  const items = Array.isArray(data) ? data : [];
+  if (items.length === 0) return 'No option contracts available.';
+  const lines = ['Option Contracts', ''];
+  lines.push('| Symbol | Expiry | Strike | Type | Lot |');
+  lines.push('|--------|--------|--------|------|-----|');
+  for (const row of items.slice(0, 20) as Rec[]) {
+    const expiryValue = row.expiry;
+    const expiry = typeof expiryValue === 'number'
+      ? new Date(expiryValue).toISOString().slice(0, 10)
+      : String(expiryValue ?? '—').slice(0, 10);
+    lines.push(`| ${row.trading_symbol ?? row.underlying_symbol ?? '—'} | ${expiry} | ${row.strike_price ?? '—'} | ${row.instrument_type ?? row.option_type ?? '—'} | ${fmtNum(row.lot_size ?? row.minimum_lot)} |`);
+  }
+  if (items.length > 20) lines.push(`... and ${items.length - 20} more rows`);
+  return lines.join('\n');
+}
+
+export function formatOptionChain(data: unknown): string {
+  const items = Array.isArray(data) ? data : [];
+  if (items.length === 0) return 'No option chain data available.';
+  const lines = ['Option Chain', ''];
+  lines.push('| Strike | Call LTP | Call OI | Put LTP | Put OI | PCR |');
+  lines.push('|--------|----------|---------|---------|--------|-----|');
+  for (const row of items.slice(0, 20) as Rec[]) {
+    const call = (row.call_options ?? {}) as Rec;
+    const put = (row.put_options ?? {}) as Rec;
+    const callMarket = (call.market_data ?? {}) as Rec;
+    const putMarket = (put.market_data ?? {}) as Rec;
+    lines.push(`| ${row.strike_price ?? '—'} | ${fmtPrice(callMarket.ltp)} | ${fmtNum(callMarket.oi)} | ${fmtPrice(putMarket.ltp)} | ${fmtNum(putMarket.oi)} | ${row.pcr ?? '—'} |`);
+  }
+  if (items.length > 20) lines.push(`... and ${items.length - 20} more rows`);
+  return lines.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Formatter registry — maps sub-tool names to formatters
 // ---------------------------------------------------------------------------
@@ -250,10 +285,10 @@ export const FINANCIAL_FORMATTERS: Record<string, (data: unknown, args?: Rec) =>
 };
 
 export const MARKET_DATA_FORMATTERS: Record<string, (data: unknown, args?: Rec) => string> = {
-  get_stock_price_snapshot: formatStockPrice,
+  get_stock_price: formatStockPrice,
   get_stock_prices: formatStockPrices,
-  get_crypto_price_snapshot: formatCryptoPrice,
-  get_crypto_prices: formatStockPrices,
+  get_option_contracts: formatOptionContracts,
+  get_option_chain: formatOptionChain,
   get_company_news: formatNews,
   get_insider_trades: formatInsiderTrades,
 };

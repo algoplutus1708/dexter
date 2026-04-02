@@ -31,12 +31,12 @@ STRICT FORMAT - each row must:
 
 | Ticker | Rev    | OM  |
 |--------|--------|-----|
-| AAPL   | 416.2B | 31% |
+| RELIANCE | 10.2T | 17% |
 
 Keep tables compact:
 - Max 2-3 columns; prefer multiple small tables over one wide table
 - Headers: 1-3 words max. "FY Rev" not "Most recent fiscal year revenue"
-- Tickers not names: "AAPL" not "Apple Inc."
+- Tickers not names: "RELIANCE" not "Reliance Industries"
 - Abbreviate: Rev, Op Inc, Net Inc, OCF, FCF, GM, OM, EPS
 - Numbers compact: 102.5B not $102,466,000,000
 - Omit units in cells if header has them`,

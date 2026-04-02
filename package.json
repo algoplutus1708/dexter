@@ -12,6 +12,8 @@
     "dev": "bun --watch run src/index.tsx",
     "gateway": "tsx src/gateway/index.ts run",
     "gateway:login": "tsx src/gateway/index.ts login",
+    "upstox:auth-url": "tsx scripts/upstox-auth-url.ts",
+    "upstox:token": "tsx scripts/upstox-token.ts",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:watch": "bun test --watch",

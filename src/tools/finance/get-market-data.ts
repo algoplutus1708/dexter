@@ -7,22 +7,22 @@ import { formatToolResult } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
 import { withTimeout, SUB_TOOL_TIMEOUT_MS } from './utils.js';
 import { MARKET_DATA_FORMATTERS } from './formatters.js';
+import { describeIndianTickerFormat } from './india-market.js';
 
 /**
  * Rich description for the get_market_data tool.
  * Used in the system prompt to guide the LLM on when and how to use this tool.
  */
 export const GET_MARKET_DATA_DESCRIPTION = `
-Intelligent meta-tool for retrieving market data including prices, news, and insider activity. Takes a natural language query and automatically routes to appropriate market data sources.
+Intelligent meta-tool for retrieving Indian market data including prices, indices, company updates, and insider/promoter activity. Takes a natural language query and automatically routes to appropriate market data sources.
 
 ## When to Use
 
 - Current stock price snapshots (price, market cap, volume, 52-week high/low)
 - Historical stock prices over date ranges
 - Available stock ticker lookup
-- Current cryptocurrency price snapshots
-- Historical cryptocurrency prices over date ranges
-- Available crypto ticker lookup
+- Current and historical index data for NIFTY, SENSEX, Bank Nifty, and related India-market instruments
+- NSE option contracts and option-chain data
 - Multi-asset price comparisons
 - Company news and recent headlines
 - Insider trading activity
@@ -33,14 +33,14 @@ Intelligent meta-tool for retrieving market data including prices, news, and ins
 - Company financials like income statements, balance sheets, cash flow (use get_financials)
 - Financial metrics and key ratios (use get_financials)
 - Analyst estimates (use get_financials)
-- SEC filings (use read_filings)
+- Exchange or SEBI disclosures (use read_disclosures)
 - Stock screening by criteria (use stock_screener)
 - General web searches (use web_search)
 
 ## Usage Notes
 
 - Call ONCE with the complete natural language query - the tool handles complexity internally
-- Handles ticker resolution automatically (Apple -> AAPL, Bitcoin -> BTC)
+- Handles Indian ticker resolution automatically. ${describeIndianTickerFormat()}
 - Handles date inference (e.g., "last month", "past year", "YTD")
 - For "what ticker is X?" queries, this tool can look up available tickers
 - Returns structured JSON data with source URLs for verification
@@ -53,7 +53,7 @@ function formatSubToolName(name: string): string {
 
 // Import market data tools directly (avoid circular deps with index.ts)
 import { getStockPrice, getStockPrices, getStockTickers } from './stock-price.js';
-import { getCryptoPriceSnapshot, getCryptoPrices, getCryptoTickers } from './crypto.js';
+import { getOptionChain, getOptionContracts } from './options.js';
 import { getCompanyNews } from './news.js';
 import { getInsiderTrades } from './insider_trades.js';
 
@@ -63,10 +63,8 @@ const MARKET_DATA_TOOLS: StructuredToolInterface[] = [
   getStockPrice,
   getStockPrices,
   getStockTickers,
-  // Crypto Prices
-  getCryptoPriceSnapshot,
-  getCryptoPrices,
-  getCryptoTickers,
+  getOptionContracts,
+  getOptionChain,
   // News & Activity
   getCompanyNews,
   getInsiderTrades,
@@ -84,10 +82,10 @@ Given a user's natural language query about market data, call the appropriate to
 
 ## Guidelines
 
-1. **Ticker Resolution**: Convert company/crypto names to ticker symbols:
-   - Apple → AAPL, Tesla → TSLA, Microsoft → MSFT, Amazon → AMZN
-   - Google/Alphabet → GOOGL, Meta/Facebook → META, Nvidia → NVDA
-   - Bitcoin → BTC, Ethereum → ETH, Solana → SOL
+1. **Ticker Resolution**: Convert company and index names to market identifiers:
+   - Reliance → RELIANCE.NSE, Infosys → INFY.NSE, HDFC Bank → HDFCBANK.NSE
+   - Sensex → SENSEX, Nifty 50 → NIFTY 50, Bank Nifty → NIFTY BANK
+   - Default to NSE cash market when the exchange is omitted for Indian equities
 
 2. **Date Inference**: Use schema-supported filters for date ranges:
    - "last month" → start_date 1 month ago, end_date today
@@ -99,11 +97,10 @@ Given a user's natural language query about market data, call the appropriate to
    - For a current stock quote/snapshot (price, market cap, volume) → get_stock_price
    - For historical stock prices over a date range → get_stock_prices
    - For "what stocks are available" or ticker lookup → get_stock_tickers
-   - For a current crypto price/snapshot → get_crypto_price_snapshot
-   - For historical crypto prices over a date range → get_crypto_prices
-   - For "what cryptos are available" or crypto ticker lookup → get_crypto_tickers
+   - For option strikes, expiries, or contract discovery → get_option_contracts
+   - For put/call chain, OI, greeks, or strike-wise options analysis → get_option_chain
    - For news, catalysts, recent announcements → get_company_news
-   - For insider buying/selling activity → get_insider_trades
+   - For insider/promoter trading activity → get_insider_trades
    - For "why did X go up/down" → combine get_stock_price + get_company_news
 
 4. **Efficiency**:
@@ -126,12 +123,13 @@ const GetMarketDataInputSchema = z.object({
 export function createGetMarketData(model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: 'get_market_data',
-    description: `Intelligent meta-tool for retrieving market data including prices, news, and insider activity. Takes a natural language query and automatically routes to appropriate market data tools. Use for:
+    description: `Intelligent meta-tool for retrieving Indian market data including prices, indices, news, and insider/promoter activity. Takes a natural language query and automatically routes to appropriate market data tools. Use for:
 - Current and historical stock prices
-- Current and historical cryptocurrency prices
-- Stock and crypto ticker lookup
+- Current and historical index prices
+- Stock ticker lookup
+- NSE option contracts and option chains
 - Company news and recent headlines
-- Insider trading activity`,
+- Insider/promoter trading activity`,
     schema: GetMarketDataInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;

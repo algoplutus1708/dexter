@@ -68,14 +68,14 @@ Once the gateway is running:
 
 1. Open WhatsApp on your phone
 2. Go to your own chat (message yourself)
-3. Send a message like "What is Apple's revenue?"
+3. Send a message like "What is Reliance's revenue?"
 4. You'll see a typing indicator while Dexter processes
 5. Dexter's response will appear in the chat
 
 **Example conversation:**
 ```
-You: What was NVIDIA's revenue in 2024?
-Dexter: NVIDIA's revenue for fiscal year 2024 was $60.9 billion...
+You: What was Infosys's revenue in FY 2024?
+Dexter: Infosys reported revenue of roughly Rs 1.54 lakh crore in FY 2024...
 ```
 
 ## ⚙️ Configuration

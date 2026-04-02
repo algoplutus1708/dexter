@@ -2,6 +2,14 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { api } from './api.js';
 import { formatToolResult } from '../types.js';
+import { describeIndianTickerFormat, normalizeIndianTicker } from './india-market.js';
+import {
+  getYahooIndiaHistory,
+  getYahooIndiaQuote,
+  getYahooIndiaSnapshotFromChart,
+  hasStructuredFinanceProvider,
+} from './yahoo-india.js';
+import { getUpstoxHistory, getUpstoxQuote, hasUpstoxAccessToken } from './upstox.js';
 
 export const STOCK_PRICE_DESCRIPTION = `
 Fetches current stock price snapshots for equities, including open, high, low, close prices, volume, and market cap. Powered by Financial Datasets.
@@ -10,16 +18,24 @@ Fetches current stock price snapshots for equities, including open, high, low, c
 const StockPriceInputSchema = z.object({
   ticker: z
     .string()
-    .describe("The stock ticker symbol to fetch current price for. For example, 'AAPL' for Apple."),
+    .describe(`The Indian market instrument to fetch current price for. ${describeIndianTickerFormat()}`),
 });
 
 export const getStockPrice = new DynamicStructuredTool({
   name: 'get_stock_price',
   description:
-    'Fetches the current stock price snapshot for an equity ticker, including open, high, low, close prices, volume, and market cap.',
+    'Fetches the current price snapshot for an Indian-market instrument, including open, high, low, close, volume, and market cap when available.',
   schema: StockPriceInputSchema,
   func: async (input) => {
-    const ticker = input.ticker.trim().toUpperCase();
+    const ticker = normalizeIndianTicker(input.ticker);
+    if (hasUpstoxAccessToken()) {
+      const upstox = await getUpstoxQuote(ticker);
+      return formatToolResult(upstox.data, [upstox.url]);
+    }
+    if (!hasStructuredFinanceProvider()) {
+      const fallback = await getYahooIndiaQuote(ticker).catch(() => getYahooIndiaSnapshotFromChart(ticker));
+      return formatToolResult(fallback.data, [fallback.url]);
+    }
     const params = { ticker };
     const { data, url } = await api.get('/prices/snapshot/', params);
     return formatToolResult(data.snapshot || {}, [url]);
@@ -29,7 +45,7 @@ export const getStockPrice = new DynamicStructuredTool({
 const StockPricesInputSchema = z.object({
   ticker: z
     .string()
-    .describe("The stock ticker symbol to fetch historical prices for. For example, 'AAPL' for Apple."),
+    .describe(`The Indian market instrument to fetch historical prices for. ${describeIndianTickerFormat()}`),
   interval: z
     .enum(['day', 'week', 'month', 'year'])
     .default('day')
@@ -41,11 +57,29 @@ const StockPricesInputSchema = z.object({
 export const getStockPrices = new DynamicStructuredTool({
   name: 'get_stock_prices',
   description:
-    'Retrieves historical price data for a stock over a specified date range, including open, high, low, close prices and volume.',
+    'Retrieves historical price data for an Indian-market instrument over a specified date range, including OHLC and volume.',
   schema: StockPricesInputSchema,
   func: async (input) => {
+    if (hasUpstoxAccessToken()) {
+      const upstox = await getUpstoxHistory({
+        ticker: input.ticker,
+        interval: input.interval,
+        start_date: input.start_date,
+        end_date: input.end_date,
+      });
+      return formatToolResult(upstox.data, [upstox.url]);
+    }
+    if (!hasStructuredFinanceProvider()) {
+      const fallback = await getYahooIndiaHistory({
+        ticker: input.ticker,
+        interval: input.interval,
+        start_date: input.start_date,
+        end_date: input.end_date,
+      });
+      return formatToolResult(fallback.data, [fallback.url]);
+    }
     const params = {
-      ticker: input.ticker.trim().toUpperCase(),
+      ticker: normalizeIndianTicker(input.ticker),
       interval: input.interval,
       start_date: input.start_date,
       end_date: input.end_date,
@@ -61,9 +95,21 @@ export const getStockPrices = new DynamicStructuredTool({
 
 export const getStockTickers = new DynamicStructuredTool({
   name: 'get_available_stock_tickers',
-  description: 'Retrieves the list of available stock tickers that can be used with the stock price tools.',
+  description: 'Retrieves the list of available Indian-market tickers that can be used with the price tools.',
   schema: z.object({}),
   func: async () => {
+    if (!hasStructuredFinanceProvider()) {
+      return formatToolResult([
+        'RELIANCE.NSE',
+        'TCS.NSE',
+        'INFY.NSE',
+        'HDFCBANK.NSE',
+        'SBIN.NSE',
+        'NIFTY 50',
+        'NIFTY BANK',
+        'SENSEX',
+      ], []);
+    }
     const { data, url } = await api.get('/prices/snapshot/tickers/', {}, { cacheable: true, ttlMs: 24 * 60 * 60 * 1000 });
     return formatToolResult(data.tickers || [], [url]);
   },
