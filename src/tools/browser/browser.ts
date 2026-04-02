@@ -1,5 +1,13 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
-import { chromium, Browser, Page } from 'playwright';
+// import { chromium, Browser, Page } from 'playwright';
+import { chromium } from 'playwright-extra';
+import stealth from 'puppeteer-extra-plugin-stealth';
+import type { Browser, Page } from 'playwright';
+
+// Initialize the stealth plugin immediately
+chromium.use(stealth());
+
+
 import { z } from 'zod';
 import { formatToolResult } from '../types.js';
 import { logger } from '@/utils';
@@ -146,12 +154,36 @@ To press Enter:
  * Ensure browser and page are initialized.
  * Lazily launches a headless Chromium browser on first use.
  */
+// async function ensureBrowser(): Promise<Page> {
+//   if (!browser) {
+//     browser = await chromium.launch({ headless: false });
+//   }
+//   if (!page) {
+//     const context = await browser.newContext();
+//     page = await context.newPage();
+//   }
+//   return page;
+// }
 async function ensureBrowser(): Promise<Page> {
   if (!browser) {
-    browser = await chromium.launch({ headless: false });
+    // Keep headless: false for debugging, but add args to strip automation flags
+    browser = await chromium.launch({ 
+      headless: false,
+      args: ['--disable-blink-features=AutomationControlled']
+    });
   }
   if (!page) {
-    const context = await browser.newContext();
+    // Inject a realistic Windows/Chrome user agent and a randomized viewport 
+    // so the canvas fingerprint changes slightly on every run.
+    const context = await browser.newContext({
+      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      viewport: { 
+        width: 1280 + Math.floor(Math.random() * 100), 
+        height: 800 + Math.floor(Math.random() * 100) 
+      },
+      locale: 'en-IN',
+      timezoneId: 'Asia/Kolkata'
+    });
     page = await context.newPage();
   }
   return page;
@@ -453,6 +485,10 @@ export const browserTool = new DynamicStructuredTool({
                 return formatToolResult({ error: 'ref is required for click' });
               }
               const locator = resolveRefToLocator(p, ref);
+              
+              // HUMAN EVASION JITTER: Wait 0.5 to 2 seconds before clicking
+              await p.waitForTimeout(500 + Math.random() * 1500);
+              
               await locator.click({ timeout: 8000 });
               // Wait for navigation/content to load
               await p.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {});
