@@ -152,6 +152,11 @@ export interface LlmResult {
   usage?: TokenUsage;
 }
 
+export interface MessageLlmResult {
+  response: AIMessage;
+  usage?: TokenUsage;
+}
+
 function extractUsage(result: unknown): TokenUsage | undefined {
   if (!result || typeof result !== 'object') return undefined;
   const msg = result as Record<string, unknown>;
@@ -293,7 +298,7 @@ interface CallLlmWithMessagesOptions {
 export async function callLlmWithMessages(
   messages: BaseMessage[],
   options: CallLlmWithMessagesOptions = {},
-): Promise<LlmResult> {
+): Promise<MessageLlmResult> {
   const { model = DEFAULT_MODEL, tools, signal } = options;
 
   const llm = getChatModel(model, false);

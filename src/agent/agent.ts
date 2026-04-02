@@ -333,7 +333,7 @@ export class Agent {
       tools: this.tools,
       signal: this.signal,
     });
-    return { response: result.response as AIMessage, usage: result.usage };
+    return { response: result.response, usage: result.usage };
   }
 
   // ---------------------------------------------------------------------------

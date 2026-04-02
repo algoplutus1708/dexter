@@ -15,6 +15,18 @@ interface SnapshotForAIResult {
   full?: string;
 }
 
+interface ExtractedTableRow {
+  label: string;
+  values: string[];
+}
+
+interface ExtractedTable {
+  selector: string;
+  title: string | null;
+  headers: string[];
+  rows: ExtractedTableRow[];
+}
+
 // Extended Page type with _snapshotForAI method
 interface PageWithSnapshotForAI extends Page {
   _snapshotForAI?: (opts: { timeout: number; track: string }) => Promise<SnapshotForAIResult>;
@@ -68,6 +80,7 @@ Good: Using the /url value you SEE in the snapshot
 - **navigate** - Navigate to a URL in the current tab (returns only url/title, no content)
 - **open** - Open a URL in a NEW tab (use when starting a fresh browsing session)
 - **snapshot** - See page structure with clickable refs (e.g., e1, e2, e3)
+- **extract_tables** - Extract structured HTML table data from CSS selectors
 - **act** - Interact with elements using refs (click, type, press, scroll)
 - **read** - Extract full text content from the page
 - **close** - Free browser resources when done
@@ -259,16 +272,21 @@ const actRequestSchema = z.object({
   timeMs: z.number().optional().describe('Wait time in milliseconds'),
 });
 
+function normalizeTableText(value: string): string {
+  return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
 export const browserTool = new DynamicStructuredTool({
   name: 'browser',
   description: 'Navigate websites, read content, and interact with pages. Use for accessing company websites, earnings reports, and dynamic content.',
   schema: z.object({
-    action: z.enum(['navigate', 'open', 'snapshot', 'act', 'read', 'close']).describe('The browser action to perform'),
+    action: z.enum(['navigate', 'open', 'snapshot', 'extract_tables', 'act', 'read', 'close']).describe('The browser action to perform'),
     url: z.string().optional().describe('URL for navigate action'),
     maxChars: z.number().optional().describe('Max characters for snapshot (default 50000)'),
+    selectors: z.array(z.string()).optional().describe('CSS selectors for extract_tables action'),
     request: actRequestSchema.optional().describe('Request object for act action'),
   }),
-  func: async ({ action, url, maxChars, request }) => {
+  func: async ({ action, url, maxChars, selectors, request }) => {
     try {
       switch (action) {
         case 'navigate': {
@@ -319,6 +337,105 @@ export const browserTool = new DynamicStructuredTool({
             refCount: currentRefs.size,
             refs: Object.fromEntries(currentRefs),
             hint: 'Use act with kind="click" and ref="eN" to click elements. Or navigate directly to a /url visible in the snapshot.',
+          });
+        }
+
+        case 'extract_tables': {
+          const p = await ensureBrowser();
+          const requestedSelectors = selectors?.length ? selectors : ['table'];
+
+          await p.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+
+          const tables = await p.evaluate((tableSelectors) => {
+            const clean = (value: string): string => value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+            const titleFallbacks: Record<string, string[]> = {
+              '#quarters': ['Quarterly Results'],
+              '#profit-loss': ['Profit & Loss'],
+              '#balance-sheet': ['Balance Sheet'],
+              '#cash-flow': ['Cash Flow', 'Cash Flows'],
+            };
+
+            const findRoot = (selector: string): Element | null => {
+              const direct = document.querySelector(selector);
+              if (direct) return direct;
+
+              const fallbackTitles = titleFallbacks[selector] ?? [];
+              if (fallbackTitles.length === 0) return null;
+
+              const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
+              for (const heading of headings) {
+                const headingText = clean(heading.textContent ?? '');
+                if (!fallbackTitles.includes(headingText)) continue;
+
+                let container: Element | null = heading.closest('section');
+                if (!container) {
+                  container = heading.parentElement;
+                  while (container && !container.querySelector('table')) {
+                    container = container.parentElement;
+                  }
+                }
+
+                if (container?.querySelector('table')) {
+                  return container;
+                }
+              }
+
+              return null;
+            };
+
+            return tableSelectors.map((selector) => {
+              const root = findRoot(selector);
+              if (!root) return null;
+
+              const table = root instanceof HTMLTableElement ? root : root.querySelector('table');
+              if (!table) return null;
+
+              const section = table.closest('section') ?? root.closest('section') ?? root;
+              const title = clean(
+                section.querySelector('h1, h2, h3, h4')?.textContent
+                  ?? root.querySelector('h1, h2, h3, h4')?.textContent
+                  ?? '',
+              ) || null;
+
+              let headers = Array.from(table.querySelectorAll('thead tr th'))
+                .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
+
+              const rows = Array.from(table.querySelectorAll('tbody tr'))
+                .map((row) => {
+                  const cells = Array.from(row.querySelectorAll('th, td'))
+                    .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
+
+                  if (cells.length < 2) return null;
+
+                  const [label, ...values] = cells;
+                  if (!label || values.every((value) => !value)) return null;
+
+                  return { label, values };
+                })
+                .filter((row): row is ExtractedTableRow => row !== null);
+
+              if (rows.length > 0 && headers.length === rows[0].values.length + 1) {
+                headers = headers.slice(1);
+              }
+
+              return {
+                selector,
+                title,
+                headers,
+                rows,
+              } satisfies ExtractedTable;
+            });
+          }, requestedSelectors);
+
+          const foundTables = tables.filter((table): table is ExtractedTable => table !== null);
+          const foundSelectors = new Set(foundTables.map((table) => table.selector));
+          const missingSelectors = requestedSelectors.filter((selector) => !foundSelectors.has(selector));
+
+          return formatToolResult({
+            url: p.url(),
+            title: await p.title(),
+            tables: foundTables,
+            missingSelectors,
           });
         }
 

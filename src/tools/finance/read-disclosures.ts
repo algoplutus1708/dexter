@@ -1,13 +1,14 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { RunnableConfig } from '@langchain/core/runnables';
+import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
-import { PDFParse } from 'pdf-parse';
-import { callLlm } from '../../model/llm.js';
+import { callLlm, callLlmWithMessages } from '../../model/llm.js';
 import { formatToolResult, parseSearchResults } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
 import { webFetchTool } from '../fetch/web-fetch.js';
 import { browserTool } from '../browser/browser.js';
 import { exaSearch, perplexitySearch, tavilySearch } from '../search/index.js';
+import { extractTextContent } from '../../utils/ai-message.js';
 import {
   buildCanonicalDisclosureUrls,
   buildIndiaDisclosureQueries,
@@ -16,6 +17,10 @@ import {
   isProtectedIndianDisclosureDomain,
   type IndiaDisclosureType,
 } from './india-market.js';
+
+const PDF_OCR_SYSTEM_PROMPT = 'You are a financial data extraction engine. Read this scanned Indian corporate disclosure. Extract all tabular financial data, board meeting outcomes, and text exactly as presented. Return as clean Markdown.';
+const GOOGLE_PDF_OCR_MODEL = 'gemini-3.1-pro-preview';
+const ANTHROPIC_PDF_OCR_MODEL = 'claude-sonnet-4-6';
 
 export const READ_DISCLOSURES_DESCRIPTION = `
 Intelligent meta-tool for reading Indian listed-company disclosures. Takes a natural language query and searches official NSE, BSE, and SEBI sources for the most relevant filings, announcements, and investor documents.
@@ -156,7 +161,46 @@ function browserLikeHeaders(url: string): HeadersInit {
   };
 }
 
-async function fetchPdfDisclosure(url: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'pdf' }> {
+function selectPdfOcrModel(activeModel: string): string {
+  if (activeModel.startsWith('gemini-') || activeModel.startsWith('claude-')) {
+    return activeModel;
+  }
+
+  if (process.env.GOOGLE_API_KEY) return GOOGLE_PDF_OCR_MODEL;
+  if (process.env.ANTHROPIC_API_KEY) return ANTHROPIC_PDF_OCR_MODEL;
+  throw new Error('No multimodal PDF OCR model is configured. Use a gemini-* or claude-* model, or set GOOGLE_API_KEY / ANTHROPIC_API_KEY.');
+}
+
+async function extractPdfWithMultimodalOcr(pdfBase64: string, model: string): Promise<{ text: string; model: string }> {
+  const ocrModel = selectPdfOcrModel(model);
+  const { response } = await callLlmWithMessages([
+    new SystemMessage(PDF_OCR_SYSTEM_PROMPT),
+    new HumanMessage({
+      content: [
+        {
+          type: 'text',
+          text: 'Extract this Indian corporate disclosure PDF into clean Markdown.',
+        },
+        {
+          type: 'file',
+          mimeType: 'application/pdf',
+          data: pdfBase64,
+        },
+      ],
+    }),
+  ], {
+    model: ocrModel,
+  });
+
+  const text = extractTextContent(response).trim();
+  if (!text) {
+    throw new Error(`Multimodal OCR returned no text using model ${ocrModel}`);
+  }
+
+  return { text, model: ocrModel };
+}
+
+async function fetchPdfDisclosure(url: string, model: string, _maxChars = 6000): Promise<{ content: unknown; fetchMode: 'pdf' }> {
   const response = await fetch(url, { headers: browserLikeHeaders(url) });
   if (!response.ok) {
     throw new Error(`PDF fetch failed: ${response.status} ${response.statusText}`);
@@ -168,22 +212,20 @@ async function fetchPdfDisclosure(url: string, maxChars = 6000): Promise<{ conte
   }
 
   const buffer = await response.arrayBuffer();
-  const parser = new PDFParse({ data: Buffer.from(buffer) });
+  const pdfBase64 = Buffer.from(buffer).toString('base64');
+
   try {
-    const parsed = await parser.getText();
-    const text = (parsed.text ?? '').trim();
-    if (!text) {
-      throw new Error('PDF appears to contain no extractable text (possibly scanned/image-only)');
-    }
+    const extracted = await extractPdfWithMultimodalOcr(pdfBase64, model);
     return {
       fetchMode: 'pdf',
       content: {
         url,
         title: null,
-        text: text.slice(0, maxChars),
-        truncated: text.length > maxChars,
-        pages: parsed.total ?? null,
-        extractor: 'pdf-parse',
+        text: extracted.text,
+        truncated: false,
+        pages: null,
+        extractor: 'multimodal-ocr',
+        model: extracted.model,
       },
     };
   } catch (error) {
@@ -193,8 +235,6 @@ async function fetchPdfDisclosure(url: string, maxChars = 6000): Promise<{ conte
         ? 'PDF is encrypted or password-protected'
         : message,
     );
-  } finally {
-    await parser.destroy().catch(() => undefined);
   }
 }
 
@@ -224,9 +264,9 @@ async function fetchProtectedDisclosureInBrowser(url: string, maxChars = 6000): 
   }
 }
 
-async function fetchDisclosureContent(url: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'web_fetch' | 'browser' | 'pdf' }> {
+async function fetchDisclosureContent(url: string, model: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'web_fetch' | 'browser' | 'pdf' }> {
   if (looksLikePdfUrl(url)) {
-    return fetchPdfDisclosure(url, maxChars);
+    return fetchPdfDisclosure(url, model, maxChars);
   }
 
   const head = await fetch(url, {
@@ -237,7 +277,7 @@ async function fetchDisclosureContent(url: string, maxChars = 6000): Promise<{ c
 
   const contentType = head?.headers.get('content-type')?.toLowerCase() ?? '';
   if (contentType.includes('application/pdf')) {
-    return fetchPdfDisclosure(url, maxChars);
+    return fetchPdfDisclosure(url, model, maxChars);
   }
 
   if (isProtectedIndianDisclosureDomain(url)) {
@@ -326,7 +366,7 @@ export function createReadDisclosures(model: string): DynamicStructuredTool {
       const fetchResults = await Promise.all(
         topHits.map(async (hit) => {
           try {
-            const fetched = await fetchDisclosureContent(hit.url, 6000);
+            const fetched = await fetchDisclosureContent(hit.url, model, 6000);
             return {
               url: hit.url,
               title: hit.title,
