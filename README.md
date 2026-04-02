@@ -1,6 +1,6 @@
 # Dexter 🤖
 
-Dexter is an autonomous financial research agent that thinks, plans, and learns as it works. It performs analysis using task planning, self-reflection, and real-time market data. Think Claude Code, but built specifically for financial research.
+Dexter is an autonomous financial research agent that thinks, plans, and learns as it works. It performs analysis using task planning, self-reflection, and real-time market data. This version is geared toward live market research with support for global LLM providers, CLI workflows, WhatsApp delivery, and India-market data flows.
 
 <img width="1098" height="659" alt="Screenshot 2026-01-21 at 5 25 10 PM" src="https://github.com/user-attachments/assets/3bcc3a7f-b68a-4f5e-8735-9d22196ff76e" />
 
@@ -25,10 +25,12 @@ Dexter takes complex financial questions and turns them into clear, step-by-step
 - **Intelligent Task Planning**: Automatically decomposes complex queries into structured research steps
 - **Autonomous Execution**: Selects and executes the right tools to gather financial data
 - **Self-Validation**: Checks its own work and iterates until tasks are complete
-- **Real-Time Financial Data**: Access to income statements, balance sheets, and cash flow statements
+- **Real-Time Financial Data**: Access to prices, fundamentals, statements, news, and screening workflows
+- **India Market Support**: Built-in support for NSE/BSE context, Yahoo fallback data, and Upstox-backed market flows
+- **Multi-Channel Usage**: Run in the CLI or connect it to WhatsApp through the gateway
 - **Safety Features**: Built-in loop detection and step limits to prevent runaway execution
 
-[![Twitter Follow](https://img.shields.io/twitter/follow/virattt?style=social)](https://twitter.com/virattt) [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?style=social&logo=discord)](https://discord.gg/jpGHv2XB6T)
+[Repository](https://github.com/algoplutus1708/dexter)
 
 <img width="1042" height="638" alt="Screenshot 2026-02-18 at 12 21 25 PM" src="https://github.com/user-attachments/assets/2a6334f9-863f-4bd2-a56f-923e42f4711e" />
 
@@ -37,8 +39,11 @@ Dexter takes complex financial questions and turns them into clear, step-by-step
 
 - [Bun](https://bun.com) runtime (v1.0 or higher)
 - OpenAI API key (get [here](https://platform.openai.com/api-keys))
-- Financial Datasets API key (get [here](https://financialdatasets.ai))
-- Exa API key (get [here](https://exa.ai)) - optional, for web search
+- Optional finance/search keys depending on the tools you want to use:
+  - Financial Datasets API key (get [here](https://financialdatasets.ai))
+  - Exa API key (get [here](https://exa.ai))
+  - Tavily or Perplexity key for web search fallback
+  - Upstox credentials for authenticated India-market and options workflows
 
 #### Installing Bun
 
@@ -63,7 +68,7 @@ bun --version
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/virattt/dexter.git
+git clone https://github.com/algoplutus1708/dexter.git
 cd dexter
 ```
 
@@ -87,11 +92,20 @@ cp env.example .env
 # Institutional-grade market data for agents; AAPL, NVDA, MSFT are free
 # FINANCIAL_DATASETS_API_KEY=your-financial-datasets-api-key
 
+# India market data and options support
+# INDIA_MARKET_API_BASE_URL=https://your-india-market-data-provider.example.com
+# INDIA_MARKET_API_KEY=your-india-market-api-key
+# UPSTOX_API_KEY=your-upstox-api-key
+# UPSTOX_API_SECRET=your-upstox-api-secret
+# UPSTOX_REDIRECT_URI=http://127.0.0.1:3000/callback
+# UPSTOX_ACCESS_TOKEN=your-upstox-access-token
+
 # (Optional) If using Ollama locally
 # OLLAMA_BASE_URL=http://127.0.0.1:11434
 
-# Web Search (Exa preferred, Tavily fallback)
+# Web Search (Exa preferred, Perplexity/Tavily fallback)
 # EXASEARCH_API_KEY=your-exa-api-key
+# PERPLEXITY_API_KEY=your-perplexity-api-key
 # TAVILY_API_KEY=your-tavily-api-key
 ```
 
@@ -99,12 +113,18 @@ cp env.example .env
 
 Run Dexter in interactive mode:
 ```bash
-bun start
+bun run start
 ```
 
 Or with watch mode for development:
 ```bash
-bun dev
+bun run dev
+```
+
+If you want to bootstrap the Upstox token flow for India-market features:
+```bash
+bun run upstox:auth-url
+bun run upstox:token
 ```
 
 ## 📊 How to Evaluate
