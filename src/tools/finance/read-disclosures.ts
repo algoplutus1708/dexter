@@ -9,6 +9,7 @@ import { webFetchTool } from '../fetch/web-fetch.js';
 import { browserTool } from '../browser/browser.js';
 import { exaSearch, perplexitySearch, tavilySearch } from '../search/index.js';
 import { extractTextContent } from '../../utils/ai-message.js';
+import { resolveProvider } from '../../providers.js';
 import {
   buildCanonicalDisclosureUrls,
   buildIndiaDisclosureQueries,
@@ -19,8 +20,9 @@ import {
 } from './india-market.js';
 
 const PDF_OCR_SYSTEM_PROMPT = 'You are a financial data extraction engine. Read this scanned Indian corporate disclosure. Extract all tabular financial data, board meeting outcomes, and text exactly as presented. Return as clean Markdown.';
-const GOOGLE_PDF_OCR_MODEL = 'gemini-3.1-pro-preview';
-const ANTHROPIC_PDF_OCR_MODEL = 'claude-sonnet-4-6';
+const PDF_OCR_USER_PROMPT = 'Extract this Indian corporate disclosure PDF into clean Markdown.';
+const GOOGLE_PDF_OCR_MODEL = 'gemini-1.5-pro';
+const OPENAI_PDF_OCR_MODEL = 'gpt-4o';
 
 export const READ_DISCLOSURES_DESCRIPTION = `
 Intelligent meta-tool for reading Indian listed-company disclosures. Takes a natural language query and searches official NSE, BSE, and SEBI sources for the most relevant filings, announcements, and investor documents.
@@ -71,6 +73,8 @@ type FetchedDisclosure = {
   error: string | null;
   fetchMode?: 'web_fetch' | 'browser' | 'pdf';
 };
+
+type PdfOcrMessageContent = Array<Record<string, unknown> & { type: string }>;
 
 function getOfficialSearchTool() {
   if (process.env.EXASEARCH_API_KEY) return exaSearch;
@@ -161,33 +165,65 @@ function browserLikeHeaders(url: string): HeadersInit {
   };
 }
 
+function getPdfFilename(url: string): string {
+  const path = new URL(url).pathname;
+  const filename = decodeURIComponent(path.split('/').pop() ?? '').trim();
+  return filename.toLowerCase().endsWith('.pdf') ? filename : 'disclosure.pdf';
+}
+
+function supportsPdfOcr(model: string): boolean {
+  const provider = resolveProvider(model).id;
+  return provider === 'google' || provider === 'openai';
+}
+
 function selectPdfOcrModel(activeModel: string): string {
-  if (activeModel.startsWith('gemini-') || activeModel.startsWith('claude-')) {
+  if (supportsPdfOcr(activeModel)) {
     return activeModel;
   }
 
   if (process.env.GOOGLE_API_KEY) return GOOGLE_PDF_OCR_MODEL;
-  if (process.env.ANTHROPIC_API_KEY) return ANTHROPIC_PDF_OCR_MODEL;
-  throw new Error('No multimodal PDF OCR model is configured. Use a gemini-* or claude-* model, or set GOOGLE_API_KEY / ANTHROPIC_API_KEY.');
+  if (process.env.OPENAI_API_KEY) return OPENAI_PDF_OCR_MODEL;
+  throw new Error('No multimodal PDF OCR model is configured. Use an OpenAI/Gemini model, or set GOOGLE_API_KEY / OPENAI_API_KEY.');
 }
 
-async function extractPdfWithMultimodalOcr(pdfBase64: string, model: string): Promise<{ text: string; model: string }> {
+function buildPdfOcrMessageContent(pdfBase64: string, model: string, filename: string): PdfOcrMessageContent {
+  const ocrModel = selectPdfOcrModel(model);
+  const provider = resolveProvider(ocrModel).id;
+
+  if (provider === 'google') {
+    return [
+      {
+        type: 'application/pdf',
+        data: pdfBase64,
+      },
+      {
+        type: 'text',
+        text: PDF_OCR_USER_PROMPT,
+      },
+    ];
+  }
+
+  return [
+    {
+      type: 'text',
+      text: PDF_OCR_USER_PROMPT,
+    },
+    {
+      type: 'file',
+      mimeType: 'application/pdf',
+      data: pdfBase64,
+      metadata: { filename },
+    },
+  ];
+}
+
+async function extractPdfWithMultimodalOcr(pdfBase64: string, url: string, model: string): Promise<{ text: string; model: string }> {
   const ocrModel = selectPdfOcrModel(model);
   const { response } = await callLlmWithMessages([
     new SystemMessage(PDF_OCR_SYSTEM_PROMPT),
     new HumanMessage({
-      content: [
-        {
-          type: 'text',
-          text: 'Extract this Indian corporate disclosure PDF into clean Markdown.',
-        },
-        {
-          type: 'file',
-          mimeType: 'application/pdf',
-          data: pdfBase64,
-        },
-      ],
-    }),
+      content: buildPdfOcrMessageContent(pdfBase64, ocrModel, getPdfFilename(url)),
+    } as ConstructorParameters<typeof HumanMessage>[0]),
   ], {
     model: ocrModel,
   });
@@ -215,7 +251,7 @@ async function fetchPdfDisclosure(url: string, model: string, _maxChars = 6000):
   const pdfBase64 = Buffer.from(buffer).toString('base64');
 
   try {
-    const extracted = await extractPdfWithMultimodalOcr(pdfBase64, model);
+    const extracted = await extractPdfWithMultimodalOcr(pdfBase64, url, model);
     return {
       fetchMode: 'pdf',
       content: {
