@@ -39,11 +39,14 @@ const INDEX_MAP: Record<string, string> = {
 type YahooSession = {
   crumb: string;
   cookie: string;
+  userAgent: string;
   fetchedAtMs: number;
 };
 
 let yahooSession: YahooSession | null = null;
 const YAHOO_SESSION_TTL_MS = 30 * 60 * 1000;
+const YAHOO_RETRY_BACKOFF_MS = [1000, 3000, 5000] as const;
+const YAHOO_BLOCKED_STATUSES = new Set([401, 403, 429]);
 
 function lastDefined<T>(values: Array<T | null | undefined> | undefined): T | undefined {
   if (!values) return undefined;
@@ -80,26 +83,68 @@ export function toYahooSymbol(input: string): string {
   return `${normalized}.${INDIA_DEFAULT_PRIMARY_EXCHANGE === 'NSE' ? 'NS' : 'BO'}`;
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function buildYahooUserAgent(): string {
+  const platforms = [
+    'Macintosh; Intel Mac OS X 14_7_2',
+    'Windows NT 10.0; Win64; x64',
+    'X11; Linux x86_64',
+  ];
+  const chromeMajor = 122 + Math.floor(Math.random() * 4);
+  const chromeBuild = 6000 + Math.floor(Math.random() * 400);
+  const chromePatch = 0 + Math.floor(Math.random() * 200);
+  const platform = platforms[Math.floor(Math.random() * platforms.length)] ?? platforms[0]!;
+
+  return `Mozilla/5.0 (${platform}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor}.0.${chromeBuild}.${chromePatch} Safari/537.36`;
+}
+
+function isYahooBlockedStatus(status: number): boolean {
+  return YAHOO_BLOCKED_STATUSES.has(status);
+}
+
 async function fetchJson<T>(url: string): Promise<T> {
-  const session = await getYahooSession();
-  const requestUrl = new URL(url);
-  if (!requestUrl.searchParams.has('crumb')) {
-    requestUrl.searchParams.set('crumb', session.crumb);
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= YAHOO_RETRY_BACKOFF_MS.length; attempt += 1) {
+    try {
+      const session = await getYahooSession();
+      const requestUrl = new URL(url);
+      if (!requestUrl.searchParams.has('crumb')) {
+        requestUrl.searchParams.set('crumb', session.crumb);
+      }
+
+      const response = await fetch(requestUrl.toString(), {
+        headers: {
+          'User-Agent': session.userAgent,
+          Accept: 'application/json',
+          Cookie: session.cookie,
+        },
+      });
+
+      if (!response.ok) {
+        if (isYahooBlockedStatus(response.status)) {
+          yahooSession = null;
+          throw new Error(`Yahoo Finance request failed: ${response.status} ${response.statusText}`);
+        }
+
+        throw new Error(`Yahoo Finance request failed: ${response.status} ${response.statusText}`);
+      }
+
+      return response.json() as Promise<T>;
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      if (attempt === YAHOO_RETRY_BACKOFF_MS.length) {
+        break;
+      }
+
+      await delay(YAHOO_RETRY_BACKOFF_MS[attempt]);
+    }
   }
 
-  const response = await fetch(requestUrl.toString(), {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-      Accept: 'application/json',
-      Cookie: session.cookie,
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Yahoo Finance request failed: ${response.status} ${response.statusText}`);
-  }
-
-  return response.json() as Promise<T>;
+  throw lastError ?? new Error('Yahoo Finance request failed after retries');
 }
 
 function extractCookieFromResponse(response: Response): string {
@@ -120,9 +165,10 @@ async function getYahooSession(): Promise<YahooSession> {
     return yahooSession;
   }
 
+  const userAgent = buildYahooUserAgent();
   const homepage = await fetch('https://finance.yahoo.com/', {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'User-Agent': userAgent,
       Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
       'Accept-Language': 'en-US,en;q=0.9',
     },
@@ -135,7 +181,7 @@ async function getYahooSession(): Promise<YahooSession> {
   const cookie = extractCookieFromResponse(homepage);
   const crumbResponse = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      'User-Agent': userAgent,
       Accept: 'text/plain,*/*',
       Cookie: cookie,
     },
@@ -150,7 +196,7 @@ async function getYahooSession(): Promise<YahooSession> {
     throw new Error('Yahoo Finance crumb was empty');
   }
 
-  yahooSession = { crumb, cookie, fetchedAtMs: Date.now() };
+  yahooSession = { crumb, cookie, userAgent, fetchedAtMs: Date.now() };
   return yahooSession;
 }
 

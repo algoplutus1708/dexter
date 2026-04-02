@@ -13,6 +13,7 @@ import { runAgentForMessage, isSessionRunning, enqueueForSession } from './agent
 import { cleanMarkdownForWhatsApp } from './utils.js';
 import { startCronRunner } from '../cron/runner.js';
 import { ensureHeartbeatCronJob } from '../cron/heartbeat-migration.js';
+import { ensureUpstoxHealthCronJob } from '../cron/upstox-health-migration.js';
 import {
   isBotMentioned,
   recordGroupMessage,
@@ -228,6 +229,7 @@ export async function startGateway(params: { configPath?: string } = {}): Promis
   await manager.startAll();
 
   ensureHeartbeatCronJob(params.configPath);
+  ensureUpstoxHealthCronJob();
   const cron = startCronRunner({ configPath: params.configPath });
 
   return {
@@ -238,4 +240,3 @@ export async function startGateway(params: { configPath?: string } = {}): Promis
     snapshot: () => manager.getSnapshot(),
   };
 }
-

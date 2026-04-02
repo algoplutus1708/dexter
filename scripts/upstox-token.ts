@@ -1,6 +1,9 @@
 import 'dotenv/config';
-import { exchangeUpstoxAuthCode, hasUpstoxCredentials } from '../src/tools/finance/upstox.js';
-import { saveApiKeyToEnv } from '../src/utils/env.js';
+import {
+  exchangeUpstoxAuthCode,
+  getUpstoxTokenStorePath,
+  hasUpstoxCredentials,
+} from '../src/tools/finance/upstox.js';
 
 function parseCodeFromArgs(): string | null {
   const args = process.argv.slice(2);
@@ -40,13 +43,7 @@ async function main() {
     process.exit(1);
   }
 
-  const saved = saveApiKeyToEnv('UPSTOX_ACCESS_TOKEN', accessToken);
-  if (!saved) {
-    console.error('Token exchange succeeded, but saving UPSTOX_ACCESS_TOKEN to .env failed.');
-    process.exit(1);
-  }
-
-  console.log('Saved UPSTOX_ACCESS_TOKEN to .env');
+  console.log(`Saved Upstox access token to ${getUpstoxTokenStorePath()}`);
   if (tokenResponse.user_id) {
     console.log(`User: ${tokenResponse.user_id}`);
   }

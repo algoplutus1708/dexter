@@ -1,8 +1,13 @@
+import { randomBytes } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import { formatToolResult } from '../types.js';
+import { dexterPath } from '../../utils/paths.js';
 import { normalizeIndianTicker } from './india-market.js';
 
 const UPSTOX_AUTH_URL = 'https://api.upstox.com/v2/login/authorization/dialog';
 const UPSTOX_TOKEN_URL = 'https://api.upstox.com/v2/login/authorization/token';
+const UPSTOX_PROFILE_URL = 'https://api.upstox.com/v2/user/profile';
 const UPSTOX_LTP_URL = 'https://api.upstox.com/v2/market-quote/ltp';
 const UPSTOX_OHLC_URL = 'https://api.upstox.com/v3/market-quote/ohlc';
 const UPSTOX_HISTORY_URL = 'https://api.upstox.com/v3/historical-candle';
@@ -11,6 +16,7 @@ const UPSTOX_OPTION_CHAIN_URL = 'https://api.upstox.com/v2/option/chain';
 
 const NSE_INSTRUMENTS_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz';
 const BSE_INSTRUMENTS_URL = 'https://assets.upstox.com/market-quote/instruments/exchange/BSE.json.gz';
+const UPSTOX_TOKEN_STORE_PATH = dexterPath('upstox-token.json');
 
 export type UpstoxInstrument = {
   segment?: string;
@@ -77,6 +83,14 @@ type UpstoxTokenResponse = {
   email?: string;
 };
 
+type UpstoxTokenStore = {
+  accessToken: string;
+  updatedAt: string;
+  source: 'oauth' | 'env';
+  userId?: string;
+  email?: string;
+};
+
 type UpstoxOptionContractsResponse = {
   data?: Array<Record<string, unknown>>;
 };
@@ -94,19 +108,105 @@ export class UpstoxAuthExpiredError extends Error {
   }
 }
 
+export class UpstoxMissingTokenError extends Error {
+  constructor(message = 'UPSTOX_ACCESS_TOKEN is not set. Complete the Upstox OAuth flow first.') {
+    super(message);
+    this.name = 'UpstoxMissingTokenError';
+  }
+}
+
+function readUpstoxTokenStore(): UpstoxTokenStore | null {
+  if (!existsSync(UPSTOX_TOKEN_STORE_PATH)) {
+    return null;
+  }
+
+  try {
+    const raw = readFileSync(UPSTOX_TOKEN_STORE_PATH, 'utf-8');
+    const parsed = JSON.parse(raw) as Partial<UpstoxTokenStore>;
+    if (!parsed || typeof parsed.accessToken !== 'string' || !parsed.accessToken.trim()) {
+      return null;
+    }
+
+    return {
+      accessToken: parsed.accessToken,
+      updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
+      source: parsed.source === 'env' ? 'env' : 'oauth',
+      ...(typeof parsed.userId === 'string' ? { userId: parsed.userId } : {}),
+      ...(typeof parsed.email === 'string' ? { email: parsed.email } : {}),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function getUpstoxTokenStorePath(): string {
+  return UPSTOX_TOKEN_STORE_PATH;
+}
+
+export function saveUpstoxAccessToken(
+  accessToken: string,
+  metadata: { source?: 'oauth' | 'env'; userId?: string; email?: string } = {},
+): void {
+  const dir = dirname(UPSTOX_TOKEN_STORE_PATH);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+
+  const store: UpstoxTokenStore = {
+    accessToken,
+    updatedAt: new Date().toISOString(),
+    source: metadata.source ?? 'oauth',
+    ...(metadata.userId ? { userId: metadata.userId } : {}),
+    ...(metadata.email ? { email: metadata.email } : {}),
+  };
+
+  const tmp = `${UPSTOX_TOKEN_STORE_PATH}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
+
+  try {
+    writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8');
+    renameSync(tmp, UPSTOX_TOKEN_STORE_PATH);
+    process.env.UPSTOX_ACCESS_TOKEN = accessToken;
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* ignore */ }
+    throw error;
+  }
+}
+
+function migrateEnvTokenToStore(): string | null {
+  const existing = readUpstoxTokenStore();
+  if (existing?.accessToken) {
+    process.env.UPSTOX_ACCESS_TOKEN = existing.accessToken;
+    return existing.accessToken;
+  }
+
+  const envToken = process.env.UPSTOX_ACCESS_TOKEN?.trim();
+  if (!envToken) {
+    return null;
+  }
+
+  try {
+    saveUpstoxAccessToken(envToken, { source: 'env' });
+  } catch {
+    process.env.UPSTOX_ACCESS_TOKEN = envToken;
+  }
+
+  return envToken;
+}
+
 export function hasUpstoxCredentials(): boolean {
   return Boolean(process.env.UPSTOX_API_KEY && process.env.UPSTOX_API_SECRET && process.env.UPSTOX_REDIRECT_URI);
 }
 
 export function hasUpstoxAccessToken(): boolean {
-  return Boolean(process.env.UPSTOX_ACCESS_TOKEN);
+  return Boolean(readUpstoxTokenStore()?.accessToken ?? migrateEnvTokenToStore());
 }
 
-function getUpstoxAccessToken(): string {
-  const token = process.env.UPSTOX_ACCESS_TOKEN;
+export function getUpstoxAccessToken(): string {
+  const token = readUpstoxTokenStore()?.accessToken ?? migrateEnvTokenToStore();
   if (!token) {
-    throw new Error('UPSTOX_ACCESS_TOKEN is not set. Complete the Upstox OAuth flow first.');
+    throw new UpstoxMissingTokenError();
   }
+  process.env.UPSTOX_ACCESS_TOKEN = token;
   return token;
 }
 
@@ -185,7 +285,21 @@ export async function exchangeUpstoxAuthCode(code: string): Promise<UpstoxTokenR
     throw new Error(`Upstox token exchange failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`);
   }
 
-  return response.json() as Promise<UpstoxTokenResponse>;
+  const tokenResponse = await response.json() as UpstoxTokenResponse;
+  if (tokenResponse.access_token) {
+    saveUpstoxAccessToken(tokenResponse.access_token, {
+      source: 'oauth',
+      userId: tokenResponse.user_id,
+      email: tokenResponse.email,
+    });
+  }
+
+  return tokenResponse;
+}
+
+export async function pingUpstoxApi(): Promise<{ url: string }> {
+  await fetchJson<Record<string, unknown>>(UPSTOX_PROFILE_URL, { headers: upstoxHeaders() });
+  return { url: UPSTOX_PROFILE_URL };
 }
 
 async function loadInstrumentUniverse(exchange: 'NSE' | 'BSE'): Promise<UpstoxInstrument[]> {
@@ -361,7 +475,7 @@ export function formatUpstoxAuthInstructions(): string {
     '1. Run the auth URL helper to print the Upstox login URL.',
     '2. Open that URL in your browser and approve the app.',
     '3. Copy the `code` query parameter from the redirect URL.',
-    '4. Run the token exchange helper with that code to save UPSTOX_ACCESS_TOKEN into .env.',
+    `4. Run the token exchange helper with that code to save the access token into ${UPSTOX_TOKEN_STORE_PATH}.`,
   ].join('\n');
 }
 

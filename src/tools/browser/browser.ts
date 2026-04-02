@@ -28,7 +28,7 @@ interface ExtractedTableRow {
   values: string[];
 }
 
-interface ExtractedTable {
+export interface ExtractedTable {
   selector: string;
   title: string | null;
   headers: string[];
@@ -164,7 +164,14 @@ To press Enter:
 //   }
 //   return page;
 // }
-async function ensureBrowser(): Promise<Page> {
+const TABLE_TITLE_FALLBACKS: Record<string, string[]> = {
+  '#quarters': ['Quarterly Results'],
+  '#profit-loss': ['Profit & Loss'],
+  '#balance-sheet': ['Balance Sheet'],
+  '#cash-flow': ['Cash Flow', 'Cash Flows'],
+};
+
+export async function ensureBrowser(): Promise<Page> {
   if (!browser) {
     // Keep headless: false for debugging, but add args to strip automation flags
     browser = await chromium.launch({ 
@@ -192,7 +199,7 @@ async function ensureBrowser(): Promise<Page> {
 /**
  * Close the browser and reset state.
  */
-async function closeBrowser(): Promise<void> {
+export async function closeBrowser(): Promise<void> {
   if (browser) {
     await browser.close();
     browser = null;
@@ -304,8 +311,100 @@ const actRequestSchema = z.object({
   timeMs: z.number().optional().describe('Wait time in milliseconds'),
 });
 
-function normalizeTableText(value: string): string {
-  return value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+export async function extractTablesFromPage(
+  p: Page,
+  selectors: string[],
+): Promise<{ tables: ExtractedTable[]; missingSelectors: string[] }> {
+  const requestedSelectors = selectors.length ? selectors : ['table'];
+
+  await p.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
+
+  const tables = await p.evaluate(({ tableSelectors, titleFallbacks }) => {
+    const clean = (value: string): string => value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
+
+    const findRoot = (selector: string): Element | null => {
+      const direct = document.querySelector(selector);
+      if (direct) return direct;
+
+      const fallbackTitles = titleFallbacks[selector] ?? [];
+      if (fallbackTitles.length === 0) return null;
+
+      const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
+      for (const heading of headings) {
+        const headingText = clean(heading.textContent ?? '');
+        if (!fallbackTitles.includes(headingText)) continue;
+
+        let container: Element | null = heading.closest('section');
+        if (!container) {
+          container = heading.parentElement;
+          while (container && !container.querySelector('table')) {
+            container = container.parentElement;
+          }
+        }
+
+        if (container?.querySelector('table')) {
+          return container;
+        }
+      }
+
+      return null;
+    };
+
+    return tableSelectors.map((selector) => {
+      const root = findRoot(selector);
+      if (!root) return null;
+
+      const table = root instanceof HTMLTableElement ? root : root.querySelector('table');
+      if (!table) return null;
+
+      const section = table.closest('section') ?? root.closest('section') ?? root;
+      const title = clean(
+        section.querySelector('h1, h2, h3, h4')?.textContent
+          ?? root.querySelector('h1, h2, h3, h4')?.textContent
+          ?? '',
+      ) || null;
+
+      let headers = Array.from(table.querySelectorAll('thead tr th'))
+        .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
+
+      const rows = Array.from(table.querySelectorAll('tbody tr'))
+        .map((row) => {
+          const cells = Array.from(row.querySelectorAll('th, td'))
+            .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
+
+          if (cells.length < 2) return null;
+
+          const [label, ...values] = cells;
+          if (!label || values.every((value) => !value)) return null;
+
+          return { label, values };
+        })
+        .filter((row): row is ExtractedTableRow => row !== null);
+
+      if (rows.length > 0 && headers.length === rows[0].values.length + 1) {
+        headers = headers.slice(1);
+      }
+
+      return {
+        selector,
+        title,
+        headers,
+        rows,
+      } satisfies ExtractedTable;
+    });
+  }, {
+    tableSelectors: requestedSelectors,
+    titleFallbacks: TABLE_TITLE_FALLBACKS,
+  });
+
+  const foundTables = tables.filter((table): table is ExtractedTable => table !== null);
+  const foundSelectors = new Set(foundTables.map((table) => table.selector));
+  const missingSelectors = requestedSelectors.filter((selector) => !foundSelectors.has(selector));
+
+  return {
+    tables: foundTables,
+    missingSelectors,
+  };
 }
 
 export const browserTool = new DynamicStructuredTool({
@@ -374,99 +473,15 @@ export const browserTool = new DynamicStructuredTool({
 
         case 'extract_tables': {
           const p = await ensureBrowser();
-          const requestedSelectors = selectors?.length ? selectors : ['table'];
-
-          await p.waitForLoadState('networkidle', { timeout: 5000 }).catch(() => {});
-
-          const tables = await p.evaluate((tableSelectors) => {
-            const clean = (value: string): string => value.replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
-            const titleFallbacks: Record<string, string[]> = {
-              '#quarters': ['Quarterly Results'],
-              '#profit-loss': ['Profit & Loss'],
-              '#balance-sheet': ['Balance Sheet'],
-              '#cash-flow': ['Cash Flow', 'Cash Flows'],
-            };
-
-            const findRoot = (selector: string): Element | null => {
-              const direct = document.querySelector(selector);
-              if (direct) return direct;
-
-              const fallbackTitles = titleFallbacks[selector] ?? [];
-              if (fallbackTitles.length === 0) return null;
-
-              const headings = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
-              for (const heading of headings) {
-                const headingText = clean(heading.textContent ?? '');
-                if (!fallbackTitles.includes(headingText)) continue;
-
-                let container: Element | null = heading.closest('section');
-                if (!container) {
-                  container = heading.parentElement;
-                  while (container && !container.querySelector('table')) {
-                    container = container.parentElement;
-                  }
-                }
-
-                if (container?.querySelector('table')) {
-                  return container;
-                }
-              }
-
-              return null;
-            };
-
-            return tableSelectors.map((selector) => {
-              const root = findRoot(selector);
-              if (!root) return null;
-
-              const table = root instanceof HTMLTableElement ? root : root.querySelector('table');
-              if (!table) return null;
-
-              const section = table.closest('section') ?? root.closest('section') ?? root;
-              const title = clean(
-                section.querySelector('h1, h2, h3, h4')?.textContent
-                  ?? root.querySelector('h1, h2, h3, h4')?.textContent
-                  ?? '',
-              ) || null;
-
-              let headers = Array.from(table.querySelectorAll('thead tr th'))
-                .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
-
-              const rows = Array.from(table.querySelectorAll('tbody tr'))
-                .map((row) => {
-                  const cells = Array.from(row.querySelectorAll('th, td'))
-                    .map((cell) => clean((cell as HTMLElement).innerText || cell.textContent || ''));
-
-                  if (cells.length < 2) return null;
-
-                  const [label, ...values] = cells;
-                  if (!label || values.every((value) => !value)) return null;
-
-                  return { label, values };
-                })
-                .filter((row): row is ExtractedTableRow => row !== null);
-
-              if (rows.length > 0 && headers.length === rows[0].values.length + 1) {
-                headers = headers.slice(1);
-              }
-
-              return {
-                selector,
-                title,
-                headers,
-                rows,
-              } satisfies ExtractedTable;
-            });
-          }, requestedSelectors);
-
-          const foundTables = tables.filter((table): table is ExtractedTable => table !== null);
-          const foundSelectors = new Set(foundTables.map((table) => table.selector));
-          const missingSelectors = requestedSelectors.filter((selector) => !foundSelectors.has(selector));
+          const { tables, missingSelectors } = await extractTablesFromPage(
+            p,
+            selectors?.length ? selectors : ['table'],
+          );
 
           return formatToolResult({
             url: p.url(),
             title: await p.title(),
-            tables: foundTables,
+            tables,
             missingSelectors,
           });
         }

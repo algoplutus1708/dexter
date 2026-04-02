@@ -25,6 +25,7 @@ export type CronPayload = {
   message: string;
   model?: string;
   modelProvider?: string;
+  systemTask?: 'upstox_health_check';
 };
 
 // --- Job State ---

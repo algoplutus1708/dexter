@@ -2,7 +2,7 @@ import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { stripFieldsDeep } from './api.js';
 import { formatToolResult } from '../types.js';
-import { browserTool } from '../browser/browser.js';
+import { closeBrowser, ensureBrowser, extractTablesFromPage, type ExtractedTable } from '../browser/browser.js';
 import {
   describeIndianTickerFormat,
   getTickerSymbol,
@@ -55,16 +55,8 @@ type StatementKind = 'income' | 'balance' | 'cashflow' | 'all';
 type BrowserTableSelector = typeof SCREENER_TABLE_SELECTORS[number];
 type StatementPeriod = 'annual' | 'quarterly' | 'ttm';
 
-type BrowserTableRow = {
-  label: string;
-  values: string[];
-};
-
-type BrowserTable = {
+type BrowserTable = ExtractedTable & {
   selector: BrowserTableSelector;
-  title: string | null;
-  headers: string[];
-  rows: BrowserTableRow[];
 };
 
 type ScrapedTables = Partial<Record<BrowserTableSelector, BrowserTable>>;
@@ -112,15 +104,6 @@ function normalizeCombinedStatements(value: unknown): Record<string, unknown> {
   };
 }
 
-function parseToolPayload(raw: unknown): Record<string, unknown> {
-  const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-  if (parsed && typeof parsed === 'object' && 'data' in parsed) {
-    const data = (parsed as { data?: unknown }).data;
-    return data && typeof data === 'object' ? data as Record<string, unknown> : {};
-  }
-  return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : {};
-}
-
 function isBrowserTable(value: unknown): value is BrowserTable {
   if (!value || typeof value !== 'object') return false;
   const rec = value as Record<string, unknown>;
@@ -134,44 +117,6 @@ function isBrowserTable(value: unknown): value is BrowserTable {
 function buildScreenerCompanyUrl(ticker: string): string {
   const symbol = encodeURIComponent(getTickerSymbol(ticker));
   return `https://www.screener.in/company/${symbol}/consolidated/`;
-}
-
-async function fetchScreenerTables(ticker: string): Promise<{ url: string; tables: ScrapedTables }> {
-  const normalizedTicker = normalizeIndianTicker(ticker);
-  const url = buildScreenerCompanyUrl(normalizedTicker);
-
-  try {
-    const openRaw = await browserTool.invoke({ action: 'open', url });
-    const openData = parseToolPayload(openRaw);
-    if (typeof openData.error === 'string') {
-      throw new Error(openData.error);
-    }
-
-    const extractRaw = await browserTool.invoke({
-      action: 'extract_tables',
-      selectors: [...SCREENER_TABLE_SELECTORS],
-    });
-    const extractData = parseToolPayload(extractRaw);
-    if (typeof extractData.error === 'string') {
-      throw new Error(extractData.error);
-    }
-
-    const tables = (Array.isArray(extractData.tables) ? extractData.tables : [])
-      .filter(isBrowserTable)
-      .reduce<ScrapedTables>((acc, table) => {
-        acc[table.selector] = table;
-        return acc;
-      }, {});
-
-    if (Object.keys(tables).length === 0) {
-      throw new Error('Screener table extraction returned no tables');
-    }
-
-    const finalUrl = typeof extractData.url === 'string' ? extractData.url : url;
-    return { url: finalUrl, tables };
-  } finally {
-    await browserTool.invoke({ action: 'close' }).catch(() => undefined);
-  }
 }
 
 function normalizeMetricLabel(label: string): string {
@@ -393,10 +338,16 @@ function selectColumns(
 }
 
 function buildIncomeStatements(input: FinancialStatementsInput, tables: ScrapedTables): unknown[] {
-  const table = input.period === 'quarterly' ? tables['#quarters'] : tables['#profit-loss'];
+  const table = input.period === 'quarterly'
+    ? (tables['#quarters'] ?? tables['#profit-loss'])
+    : tables['#profit-loss'];
   if (!table) return [];
 
-  const columns = selectColumns(table.headers, input, input.period === 'quarterly' ? 'quarterly' : 'annual');
+  const columns = selectColumns(
+    table.headers,
+    input,
+    input.period === 'quarterly' && table.selector === '#quarters' ? 'quarterly' : 'annual',
+  );
   return normalizeStatementRows(columns.map((column) => {
     const lookup = buildMetricLookup(table, column.index);
 
@@ -508,23 +459,46 @@ async function fetchFundamentals(
   kind: StatementKind,
   input: FinancialStatementsInput,
 ): Promise<{ data: unknown; url: string }> {
-  const { url, tables } = await fetchScreenerTables(input.ticker);
+  const normalizedTicker = normalizeIndianTicker(input.ticker);
+  const url = buildScreenerCompanyUrl(normalizedTicker);
+  const page = await ensureBrowser();
 
-  const combined = normalizeCombinedStatements({
-    income_statements: buildIncomeStatements(input, tables),
-    balance_sheets: buildBalanceSheets(input, tables),
-    cash_flow_statements: buildCashFlowStatements(input, tables),
-  });
+  try {
+    await page.goto(url, { timeout: 30000, waitUntil: 'networkidle' });
 
-  switch (kind) {
-    case 'income':
-      return { data: combined.income_statements, url };
-    case 'balance':
-      return { data: combined.balance_sheets, url };
-    case 'cashflow':
-      return { data: combined.cash_flow_statements, url };
-    case 'all':
-      return { data: combined, url };
+    const { tables: extractedTables } = await extractTablesFromPage(page, [...SCREENER_TABLE_SELECTORS]);
+    const tables = extractedTables
+      .filter(isBrowserTable)
+      .reduce<ScrapedTables>((acc, table) => {
+        acc[table.selector] = table;
+        return acc;
+      }, {});
+
+    if (Object.keys(tables).length === 0) {
+      const pageTitle = await page.title().catch(() => '');
+      throw new Error(
+        `Screener table extraction returned no tables${pageTitle ? ` for page "${pageTitle}"` : ''}`,
+      );
+    }
+
+    const combined = normalizeCombinedStatements({
+      income_statements: buildIncomeStatements(input, tables),
+      balance_sheets: buildBalanceSheets(input, tables),
+      cash_flow_statements: buildCashFlowStatements(input, tables),
+    });
+
+    switch (kind) {
+      case 'income':
+        return { data: combined.income_statements, url: page.url() };
+      case 'balance':
+        return { data: combined.balance_sheets, url: page.url() };
+      case 'cashflow':
+        return { data: combined.cash_flow_statements, url: page.url() };
+      case 'all':
+        return { data: combined, url: page.url() };
+    }
+  } finally {
+    await closeBrowser().catch(() => undefined);
   }
 }
 

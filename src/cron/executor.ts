@@ -8,13 +8,20 @@ import {
 import { assertOutboundAllowed, sendMessageWhatsApp } from '../gateway/channels/whatsapp/index.js';
 import { resolveSessionStorePath, loadSessionStore, type SessionEntry } from '../gateway/sessions/store.js';
 import { cleanMarkdownForWhatsApp } from '../gateway/utils.js';
+import {
+  pingUpstoxApi,
+  UpstoxAuthExpiredError,
+  UpstoxMissingTokenError,
+} from '../tools/finance/upstox.js';
 import { getSetting } from '../utils/config.js';
 import { dexterPath } from '../utils/paths.js';
 import { saveCronStore } from './store.js';
 import { computeNextRunAtMs } from './schedule.js';
+import { UPSTOX_HEALTH_SYSTEM_TASK } from './upstox-health-migration.js';
 import type { ActiveHours, CronJob, CronStore } from './types.js';
 
 const LOG_PATH = dexterPath('gateway-debug.log');
+const UPSTOX_TOKEN_EXPIRED_ALERT = 'CRITICAL: Upstox Token Expired. Run auth script immediately before market open.';
 
 function debugLog(msg: string) {
   appendFileSync(LOG_PATH, `${new Date().toISOString()} ${msg}\n`);
@@ -87,6 +94,74 @@ function findTargetSession(): SessionEntry | null {
   return entries[0];
 }
 
+async function emitSystemAlert(message: string): Promise<boolean> {
+  const session = findTargetSession();
+  if (!session?.lastTo || !session?.lastAccountId) {
+    debugLog('[cron] system alert skipped: no delivery target');
+    return false;
+  }
+
+  try {
+    assertOutboundAllowed({ to: session.lastTo, accountId: session.lastAccountId });
+  } catch {
+    debugLog('[cron] system alert skipped: outbound blocked');
+    return false;
+  }
+
+  try {
+    await sendMessageWhatsApp({
+      to: session.lastTo,
+      body: cleanMarkdownForWhatsApp(message),
+      accountId: session.lastAccountId,
+    });
+    debugLog(`[cron] system alert delivered to ${session.lastTo}`);
+    return true;
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    debugLog(`[cron] system alert delivery failed: ${msg}`);
+    return false;
+  }
+}
+
+function markJobRun(
+  job: CronJob,
+  status: 'ok' | 'suppressed',
+  startedAt: number,
+  store: CronStore,
+  details?: { lastError?: string },
+): void {
+  job.state.lastRunAtMs = startedAt;
+  job.state.lastDurationMs = Date.now() - startedAt;
+  job.state.lastRunStatus = status;
+  job.state.lastError = details?.lastError;
+  job.state.consecutiveErrors = 0;
+  scheduleNextRun(job, store);
+}
+
+async function executeUpstoxHealthCheckJob(job: CronJob, store: CronStore): Promise<void> {
+  const startedAt = Date.now();
+
+  try {
+    await pingUpstoxApi();
+    markJobRun(job, 'suppressed', startedAt, store);
+    debugLog(`[cron] job ${job.id}: Upstox health check OK`);
+    return;
+  } catch (error) {
+    if (error instanceof UpstoxAuthExpiredError || error instanceof UpstoxMissingTokenError) {
+      const delivered = await emitSystemAlert(UPSTOX_TOKEN_EXPIRED_ALERT);
+      markJobRun(job, delivered ? 'ok' : 'suppressed', startedAt, store, {
+        ...(delivered ? {} : { lastError: error.message }),
+      });
+      debugLog(
+        `[cron] job ${job.id}: Upstox token health alert ${delivered ? 'delivered' : 'could not be delivered'}`,
+      );
+      return;
+    }
+
+    handleJobError(job, store, error, startedAt);
+  }
+}
+
 /**
  * Execute a single cron job: run isolated agent, evaluate suppression,
  * deliver via WhatsApp, apply fulfillment mode, update state.
@@ -97,6 +172,11 @@ export async function executeCronJob(
   _params: { configPath?: string },
 ): Promise<void> {
   const startedAt = Date.now();
+
+  if (job.payload.systemTask === UPSTOX_HEALTH_SYSTEM_TASK) {
+    await executeUpstoxHealthCheckJob(job, store);
+    return;
+  }
 
   // 0. Check active hours
   if (!isWithinActiveHours(job.activeHours)) {
