@@ -9,7 +9,13 @@ import {
   getYahooIndiaSnapshotFromChart,
   hasStructuredFinanceProvider,
 } from './yahoo-india.js';
-import { getUpstoxHistory, getUpstoxQuote, hasUpstoxAccessToken } from './upstox.js';
+import {
+  formatUpstoxAuthExpiredResult,
+  getUpstoxHistory,
+  getUpstoxQuote,
+  hasUpstoxAccessToken,
+  UpstoxAuthExpiredError,
+} from './upstox.js';
 
 export const STOCK_PRICE_DESCRIPTION = `
 Fetches current stock price snapshots for equities, including open, high, low, close prices, volume, and market cap. Powered by Financial Datasets.
@@ -29,8 +35,15 @@ export const getStockPrice = new DynamicStructuredTool({
   func: async (input) => {
     const ticker = normalizeIndianTicker(input.ticker);
     if (hasUpstoxAccessToken()) {
-      const upstox = await getUpstoxQuote(ticker);
-      return formatToolResult(upstox.data, [upstox.url]);
+      try {
+        const upstox = await getUpstoxQuote(ticker);
+        return formatToolResult(upstox.data, [upstox.url]);
+      } catch (error) {
+        if (error instanceof UpstoxAuthExpiredError) {
+          return formatUpstoxAuthExpiredResult();
+        }
+        throw error;
+      }
     }
     if (!hasStructuredFinanceProvider()) {
       const fallback = await getYahooIndiaQuote(ticker).catch(() => getYahooIndiaSnapshotFromChart(ticker));
@@ -61,13 +74,20 @@ export const getStockPrices = new DynamicStructuredTool({
   schema: StockPricesInputSchema,
   func: async (input) => {
     if (hasUpstoxAccessToken()) {
-      const upstox = await getUpstoxHistory({
-        ticker: input.ticker,
-        interval: input.interval,
-        start_date: input.start_date,
-        end_date: input.end_date,
-      });
-      return formatToolResult(upstox.data, [upstox.url]);
+      try {
+        const upstox = await getUpstoxHistory({
+          ticker: input.ticker,
+          interval: input.interval,
+          start_date: input.start_date,
+          end_date: input.end_date,
+        });
+        return formatToolResult(upstox.data, [upstox.url]);
+      } catch (error) {
+        if (error instanceof UpstoxAuthExpiredError) {
+          return formatUpstoxAuthExpiredResult();
+        }
+        throw error;
+      }
     }
     if (!hasStructuredFinanceProvider()) {
       const fallback = await getYahooIndiaHistory({

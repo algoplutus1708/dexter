@@ -1,16 +1,19 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { z } from 'zod';
+import { PDFParse } from 'pdf-parse';
 import { callLlm } from '../../model/llm.js';
 import { formatToolResult, parseSearchResults } from '../types.js';
 import { getCurrentDate } from '../../agent/prompts.js';
 import { webFetchTool } from '../fetch/web-fetch.js';
+import { browserTool } from '../browser/browser.js';
 import { exaSearch, perplexitySearch, tavilySearch } from '../search/index.js';
 import {
   buildCanonicalDisclosureUrls,
   buildIndiaDisclosureQueries,
   INDIA_DISCLOSURE_DOMAINS,
   INDIA_DISCLOSURE_TYPES,
+  isProtectedIndianDisclosureDomain,
   type IndiaDisclosureType,
 } from './india-market.js';
 
@@ -53,6 +56,15 @@ type SearchHit = {
   title?: string;
   url: string;
   snippet?: string;
+};
+
+type FetchedDisclosure = {
+  url: string;
+  title?: string;
+  snippet?: string;
+  content: unknown;
+  error: string | null;
+  fetchMode?: 'web_fetch' | 'browser' | 'pdf';
 };
 
 function getOfficialSearchTool() {
@@ -130,6 +142,117 @@ function isOfficialDisclosureUrl(url: string): boolean {
   return INDIA_DISCLOSURE_DOMAINS.some((domain) => url.includes(domain));
 }
 
+function looksLikePdfUrl(url: string): boolean {
+  return url.toLowerCase().includes('.pdf');
+}
+
+function browserLikeHeaders(url: string): HeadersInit {
+  const origin = new URL(url).origin;
+  return {
+    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/pdf;q=0.8,*/*;q=0.7',
+    'Accept-Language': 'en-IN,en;q=0.9',
+    Referer: origin,
+  };
+}
+
+async function fetchPdfDisclosure(url: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'pdf' }> {
+  const response = await fetch(url, { headers: browserLikeHeaders(url) });
+  if (!response.ok) {
+    throw new Error(`PDF fetch failed: ${response.status} ${response.statusText}`);
+  }
+
+  const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+  if (!contentType.includes('application/pdf') && !looksLikePdfUrl(url)) {
+    throw new Error(`Expected PDF but received ${contentType || 'unknown content-type'}`);
+  }
+
+  const buffer = await response.arrayBuffer();
+  const parser = new PDFParse({ data: Buffer.from(buffer) });
+  try {
+    const parsed = await parser.getText();
+    const text = (parsed.text ?? '').trim();
+    if (!text) {
+      throw new Error('PDF appears to contain no extractable text (possibly scanned/image-only)');
+    }
+    return {
+      fetchMode: 'pdf',
+      content: {
+        url,
+        title: null,
+        text: text.slice(0, maxChars),
+        truncated: text.length > maxChars,
+        pages: parsed.total ?? null,
+        extractor: 'pdf-parse',
+      },
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      message.toLowerCase().includes('password') || message.toLowerCase().includes('encrypted')
+        ? 'PDF is encrypted or password-protected'
+        : message,
+    );
+  } finally {
+    await parser.destroy().catch(() => undefined);
+  }
+}
+
+async function fetchProtectedDisclosureInBrowser(url: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'browser' }> {
+  try {
+    const navigateRaw = await browserTool.invoke({ action: 'open', url });
+    const navigateParsed = typeof navigateRaw === 'string' ? JSON.parse(navigateRaw) : navigateRaw;
+    if (navigateParsed?.data?.error) {
+      throw new Error(String(navigateParsed.data.error));
+    }
+
+    const readRaw = await browserTool.invoke({ action: 'read' });
+    const readParsed = typeof readRaw === 'string' ? JSON.parse(readRaw) : readRaw;
+    const content = readParsed?.data ?? readParsed;
+    const text = typeof content?.text === 'string' ? content.text.slice(0, maxChars) : '';
+
+    return {
+      fetchMode: 'browser',
+      content: {
+        ...content,
+        text,
+        truncated: typeof content?.text === 'string' ? content.text.length > maxChars : Boolean(content?.truncated),
+      },
+    };
+  } finally {
+    await browserTool.invoke({ action: 'close' }).catch(() => undefined);
+  }
+}
+
+async function fetchDisclosureContent(url: string, maxChars = 6000): Promise<{ content: unknown; fetchMode: 'web_fetch' | 'browser' | 'pdf' }> {
+  if (looksLikePdfUrl(url)) {
+    return fetchPdfDisclosure(url, maxChars);
+  }
+
+  const head = await fetch(url, {
+    method: 'HEAD',
+    redirect: 'follow',
+    headers: browserLikeHeaders(url),
+  }).catch(() => null);
+
+  const contentType = head?.headers.get('content-type')?.toLowerCase() ?? '';
+  if (contentType.includes('application/pdf')) {
+    return fetchPdfDisclosure(url, maxChars);
+  }
+
+  if (isProtectedIndianDisclosureDomain(url)) {
+    return fetchProtectedDisclosureInBrowser(url, maxChars);
+  }
+
+  const raw = await webFetchTool.invoke({
+    url,
+    extractMode: 'text',
+    maxChars,
+  });
+  const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  return { fetchMode: 'web_fetch', content: parsed?.data ?? parsed };
+}
+
 export function createReadDisclosures(model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: 'read_disclosures',
@@ -203,27 +326,24 @@ export function createReadDisclosures(model: string): DynamicStructuredTool {
       const fetchResults = await Promise.all(
         topHits.map(async (hit) => {
           try {
-            const raw = await webFetchTool.invoke({
-              url: hit.url,
-              extractMode: 'text',
-              maxChars: 6000,
-            });
-            const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+            const fetched = await fetchDisclosureContent(hit.url, 6000);
             return {
               url: hit.url,
               title: hit.title,
               snippet: hit.snippet,
-              content: parsed,
+              content: fetched.content,
+              fetchMode: fetched.fetchMode,
               error: null,
-            };
+            } satisfies FetchedDisclosure;
           } catch (error) {
             return {
               url: hit.url,
               title: hit.title,
               snippet: hit.snippet,
               content: null,
+              fetchMode: undefined,
               error: error instanceof Error ? error.message : String(error),
-            };
+            } satisfies FetchedDisclosure;
           }
         }),
       );

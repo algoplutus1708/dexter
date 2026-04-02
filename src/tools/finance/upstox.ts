@@ -87,6 +87,13 @@ type UpstoxOptionChainResponse = {
 
 const instrumentCache = new Map<string, UpstoxInstrument[]>();
 
+export class UpstoxAuthExpiredError extends Error {
+  constructor(message = 'UPSTOX_AUTH_EXPIRED: The broker access token has expired. Instruct the user to run the login script.') {
+    super(message);
+    this.name = 'UpstoxAuthExpiredError';
+  }
+}
+
 export function hasUpstoxCredentials(): boolean {
   return Boolean(process.env.UPSTOX_API_KEY && process.env.UPSTOX_API_SECRET && process.env.UPSTOX_REDIRECT_URI);
 }
@@ -130,6 +137,9 @@ function getUpstoxRedirectUri(): string {
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new UpstoxAuthExpiredError();
+    }
     const text = await response.text().catch(() => response.statusText);
     throw new Error(`Upstox request failed: ${response.status} ${response.statusText}${text ? ` - ${text}` : ''}`);
   }
@@ -359,5 +369,12 @@ export function formatUpstoxMissingTokenResult(): string {
   return formatToolResult({
     error: 'Upstox access token is missing.',
     details: formatUpstoxAuthInstructions(),
+  }, []);
+}
+
+export function formatUpstoxAuthExpiredResult(): string {
+  return formatToolResult({
+    error: 'UPSTOX_AUTH_EXPIRED: The broker access token has expired. Instruct the user to run the login script.',
+    details: 'Run `bun run upstox:auth-url`, approve the app, then exchange the returned code with `bun run upstox:token --code <code>`.',
   }, []);
 }

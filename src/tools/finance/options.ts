@@ -1,7 +1,13 @@
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 import { formatToolResult } from '../types.js';
-import { getUpstoxOptionChain, getUpstoxOptionContracts, hasUpstoxAccessToken } from './upstox.js';
+import {
+  formatUpstoxAuthExpiredResult,
+  getUpstoxOptionChain,
+  getUpstoxOptionContracts,
+  hasUpstoxAccessToken,
+  UpstoxAuthExpiredError,
+} from './upstox.js';
 
 const OptionContractsInputSchema = z.object({
   underlying: z.string().describe('Underlying symbol or index, e.g. RELIANCE.NSE or NIFTY 50'),
@@ -20,8 +26,15 @@ export const getOptionContracts = new DynamicStructuredTool({
       }, []);
     }
 
-    const { data, url } = await getUpstoxOptionContracts(input);
-    return formatToolResult(data, [url]);
+    try {
+      const { data, url } = await getUpstoxOptionContracts(input);
+      return formatToolResult(data, [url]);
+    } catch (error) {
+      if (error instanceof UpstoxAuthExpiredError) {
+        return formatUpstoxAuthExpiredResult();
+      }
+      throw error;
+    }
   },
 });
 
@@ -42,7 +55,14 @@ export const getOptionChain = new DynamicStructuredTool({
       }, []);
     }
 
-    const { data, url } = await getUpstoxOptionChain(input);
-    return formatToolResult(data, [url]);
+    try {
+      const { data, url } = await getUpstoxOptionChain(input);
+      return formatToolResult(data, [url]);
+    } catch (error) {
+      if (error instanceof UpstoxAuthExpiredError) {
+        return formatUpstoxAuthExpiredResult();
+      }
+      throw error;
+    }
   },
 });

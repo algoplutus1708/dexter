@@ -56,6 +56,127 @@ function createParams(input: z.infer<typeof FinancialStatementsInputSchema>): Re
   };
 }
 
+type StatementKind = 'income' | 'balance' | 'cashflow' | 'all';
+
+type ProviderAdapter = {
+  endpoint: (kind: StatementKind) => string;
+  buildParams: (input: z.infer<typeof FinancialStatementsInputSchema>) => Record<string, string | number | undefined>;
+  extract: (kind: StatementKind, data: Record<string, unknown>) => unknown;
+};
+
+function detectFundamentalsProvider(): 'legacy' | 'india' {
+  return process.env.INDIA_MARKET_API_BASE_URL || process.env.FINANCE_API_BASE_URL
+    ? 'india'
+    : 'legacy';
+}
+
+function normalizeStatementRows(value: unknown): unknown[] {
+  const rows = Array.isArray(value)
+    ? value
+    : value && typeof value === 'object'
+      ? [value]
+      : [];
+
+  return rows.map((row) => {
+    const rec = row as Record<string, unknown>;
+    const reportPeriod = rec.report_period ?? rec.fiscal_date ?? rec.date ?? rec.period_end ?? null;
+    const period = rec.period ?? rec.statement_period ?? null;
+
+    return {
+      ...rec,
+      report_period: reportPeriod,
+      period,
+      currency: rec.currency ?? 'INR',
+      accession_number: rec.accession_number ?? rec.document_id ?? rec.filing_reference ?? null,
+    };
+  });
+}
+
+function normalizeCombinedStatements(value: unknown): Record<string, unknown> {
+  const rec = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    income_statements: normalizeStatementRows(rec.income_statements ?? rec.income ?? rec.profit_and_loss ?? rec.pnl),
+    balance_sheets: normalizeStatementRows(rec.balance_sheets ?? rec.balance_sheet ?? rec.balance),
+    cash_flow_statements: normalizeStatementRows(rec.cash_flow_statements ?? rec.cash_flow ?? rec.cashflows),
+  };
+}
+
+const FUNDAMENTALS_ADAPTERS: Record<'legacy' | 'india', ProviderAdapter> = {
+  legacy: {
+    endpoint: (kind) => {
+      switch (kind) {
+        case 'income':
+          return '/financials/income-statements/';
+        case 'balance':
+          return '/financials/balance-sheets/';
+        case 'cashflow':
+          return '/financials/cash-flow-statements/';
+        case 'all':
+          return '/financials/';
+      }
+    },
+    buildParams: createParams,
+    extract: (kind, data) => {
+      switch (kind) {
+        case 'income':
+          return normalizeStatementRows(data.income_statements);
+        case 'balance':
+          return normalizeStatementRows(data.balance_sheets);
+        case 'cashflow':
+          return normalizeStatementRows(data.cash_flow_statements);
+        case 'all':
+          return normalizeCombinedStatements(data.financials);
+      }
+    },
+  },
+  india: {
+    endpoint: (kind) => {
+      switch (kind) {
+        case 'income':
+          return '/indian-market/fundamentals/income-statements/';
+        case 'balance':
+          return '/indian-market/fundamentals/balance-sheets/';
+        case 'cashflow':
+          return '/indian-market/fundamentals/cash-flow-statements/';
+        case 'all':
+          return '/indian-market/fundamentals/';
+      }
+    },
+    buildParams: (input) => ({
+      symbol: normalizeIndianTicker(input.ticker),
+      statement_period: input.period,
+      limit: input.limit,
+      from_date: input.report_period_gte ?? input.report_period_gt,
+      to_date: input.report_period_lte ?? input.report_period_lt,
+    }),
+    extract: (kind, data) => {
+      switch (kind) {
+        case 'income':
+          return normalizeStatementRows(data.income_statements ?? data.data ?? data.results ?? data.statements);
+        case 'balance':
+          return normalizeStatementRows(data.balance_sheets ?? data.data ?? data.results ?? data.statements);
+        case 'cashflow':
+          return normalizeStatementRows(data.cash_flow_statements ?? data.data ?? data.results ?? data.statements);
+        case 'all':
+          return normalizeCombinedStatements(data.financials ?? data.data ?? data.results ?? data);
+      }
+    },
+  },
+};
+
+async function fetchFundamentals(
+  kind: StatementKind,
+  input: z.infer<typeof FinancialStatementsInputSchema>,
+): Promise<{ data: unknown; url: string }> {
+  const adapter = FUNDAMENTALS_ADAPTERS[detectFundamentalsProvider()];
+  const { data, url } = await api.get(
+    adapter.endpoint(kind),
+    adapter.buildParams(input),
+    { cacheable: true, ttlMs: TTL_24H },
+  );
+  return { data: adapter.extract(kind, data), url };
+}
+
 function ensureStructuredProvider(): string | null {
   if (
     process.env.FINANCE_API_BASE_URL ||
@@ -76,10 +197,9 @@ export const getIncomeStatements = new DynamicStructuredTool({
   func: async (input) => {
     const providerError = ensureStructuredProvider();
     if (providerError) return formatToolResult({ error: providerError, ticker: normalizeIndianTicker(input.ticker) }, []);
-    const params = createParams(input);
-    const { data, url } = await api.get('/financials/income-statements/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await fetchFundamentals('income', input);
     return formatToolResult(
-      stripFieldsDeep(data.income_statements || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },
@@ -92,10 +212,9 @@ export const getBalanceSheets = new DynamicStructuredTool({
   func: async (input) => {
     const providerError = ensureStructuredProvider();
     if (providerError) return formatToolResult({ error: providerError, ticker: normalizeIndianTicker(input.ticker) }, []);
-    const params = createParams(input);
-    const { data, url } = await api.get('/financials/balance-sheets/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await fetchFundamentals('balance', input);
     return formatToolResult(
-      stripFieldsDeep(data.balance_sheets || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },
@@ -108,10 +227,9 @@ export const getCashFlowStatements = new DynamicStructuredTool({
   func: async (input) => {
     const providerError = ensureStructuredProvider();
     if (providerError) return formatToolResult({ error: providerError, ticker: normalizeIndianTicker(input.ticker) }, []);
-    const params = createParams(input);
-    const { data, url } = await api.get('/financials/cash-flow-statements/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await fetchFundamentals('cashflow', input);
     return formatToolResult(
-      stripFieldsDeep(data.cash_flow_statements || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },
@@ -124,10 +242,9 @@ export const getAllFinancialStatements = new DynamicStructuredTool({
   func: async (input) => {
     const providerError = ensureStructuredProvider();
     if (providerError) return formatToolResult({ error: providerError, ticker: normalizeIndianTicker(input.ticker) }, []);
-    const params = createParams(input);
-    const { data, url } = await api.get('/financials/', params, { cacheable: true, ttlMs: TTL_24H });
+    const { data, url } = await fetchFundamentals('all', input);
     return formatToolResult(
-      stripFieldsDeep(data.financials || {}, REDUNDANT_FINANCIAL_FIELDS),
+      stripFieldsDeep(data || {}, REDUNDANT_FINANCIAL_FIELDS),
       [url]
     );
   },

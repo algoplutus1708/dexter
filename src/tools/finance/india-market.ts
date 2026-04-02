@@ -104,3 +104,7 @@ export function buildCanonicalDisclosureUrls(input: string): string[] {
   urls.push(`https://www.bseindia.com/stock-share-price/${symbol}/`);
   return urls;
 }
+
+export function isProtectedIndianDisclosureDomain(url: string): boolean {
+  return url.includes('nseindia.com') || url.includes('bseindia.com');
+}

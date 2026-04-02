@@ -36,6 +36,15 @@ const INDEX_MAP: Record<string, string> = {
   '^BSESN': '^BSESN',
 };
 
+type YahooSession = {
+  crumb: string;
+  cookie: string;
+  fetchedAtMs: number;
+};
+
+let yahooSession: YahooSession | null = null;
+const YAHOO_SESSION_TTL_MS = 30 * 60 * 1000;
+
 function lastDefined<T>(values: Array<T | null | undefined> | undefined): T | undefined {
   if (!values) return undefined;
   for (let i = values.length - 1; i >= 0; i -= 1) {
@@ -72,10 +81,17 @@ export function toYahooSymbol(input: string): string {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
+  const session = await getYahooSession();
+  const requestUrl = new URL(url);
+  if (!requestUrl.searchParams.has('crumb')) {
+    requestUrl.searchParams.set('crumb', session.crumb);
+  }
+
+  const response = await fetch(requestUrl.toString(), {
     headers: {
-      'User-Agent': 'Mozilla/5.0',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
       Accept: 'application/json',
+      Cookie: session.cookie,
     },
   });
 
@@ -84,6 +100,58 @@ async function fetchJson<T>(url: string): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+function extractCookieFromResponse(response: Response): string {
+  const setCookie = response.headers.get('set-cookie');
+  if (!setCookie) {
+    throw new Error('Yahoo Finance session cookie not found');
+  }
+
+  return setCookie
+    .split(/,(?=[^;]+=[^;]+)/)
+    .map((part) => part.split(';')[0]?.trim())
+    .filter(Boolean)
+    .join('; ');
+}
+
+async function getYahooSession(): Promise<YahooSession> {
+  if (yahooSession && Date.now() - yahooSession.fetchedAtMs < YAHOO_SESSION_TTL_MS) {
+    return yahooSession;
+  }
+
+  const homepage = await fetch('https://finance.yahoo.com/', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    },
+  });
+
+  if (!homepage.ok) {
+    throw new Error(`Yahoo Finance session bootstrap failed: ${homepage.status} ${homepage.statusText}`);
+  }
+
+  const cookie = extractCookieFromResponse(homepage);
+  const crumbResponse = await fetch('https://query1.finance.yahoo.com/v1/test/getcrumb', {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      Accept: 'text/plain,*/*',
+      Cookie: cookie,
+    },
+  });
+
+  if (!crumbResponse.ok) {
+    throw new Error(`Yahoo Finance crumb bootstrap failed: ${crumbResponse.status} ${crumbResponse.statusText}`);
+  }
+
+  const crumb = (await crumbResponse.text()).trim();
+  if (!crumb) {
+    throw new Error('Yahoo Finance crumb was empty');
+  }
+
+  yahooSession = { crumb, cookie, fetchedAtMs: Date.now() };
+  return yahooSession;
 }
 
 export async function getYahooIndiaQuote(input: string): Promise<{ data: Record<string, unknown>; url: string }> {
