@@ -79,7 +79,7 @@ export const PROVIDERS: ProviderDef[] = [
     id: 'ollama',
     displayName: 'Ollama',
     modelPrefix: 'ollama:',
-    contextWindow: 128_000,
+    contextWindow: 32_768,
   },
 ];
 

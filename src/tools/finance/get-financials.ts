@@ -39,6 +39,10 @@ const GetFinancialsInputSchema = z.object({
     .string()
     .optional()
     .describe('Alias for ticker, accepted for model compatibility.'),
+  tickers: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe('Alias for ticker, accepted for model compatibility.'),
   query: z
     .string()
     .optional()
@@ -75,14 +79,18 @@ const GetFinancialsInputSchema = z.object({
 
 type GetFinancialsInput = z.infer<typeof GetFinancialsInputSchema>;
 
-function resolveTicker(input: GetFinancialsInput): string {
-  const candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+function resolveTicker(input: GetFinancialsInput & { tickers?: string | string[] }): string {
+  let candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+  
+  if (!candidate && input.tickers) {
+    candidate = Array.isArray(input.tickers) ? input.tickers[0] : input.tickers;
+  }
 
   if (!candidate) {
     throw new Error('Ticker is required for get_financials. Provide ticker or symbol.');
   }
 
-  return candidate.trim().toUpperCase();
+  return candidate.split(',')[0].trim().toUpperCase();
 }
 
 const asString = (p: Promise<unknown>): Promise<string> =>

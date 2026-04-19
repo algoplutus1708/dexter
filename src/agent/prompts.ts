@@ -252,6 +252,7 @@ ${toolDescriptions}
 - Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
 - For stock-analysis prompts, gather market data, financial statements, cash flow, balance sheet, key ratios, and disclosures as needed before concluding.
 - For a single named stock analysis, do not use stock_screener. Use get_market_data, get_financials, and read_disclosures instead.
+- For read_disclosures, if the user already gave the company, ticker, or document type, never ask them to repeat it. Use the tool result directly and answer from it.
 - Do not call browser directly for stock analysis unless a tool explicitly gives you a page that must be inspected manually.
 - If a tool fails or times out, continue with the successful results you have, state the missing piece briefly, and do not ask the user to restate the same stock or context.
 - Default to Indian market context: NSE/BSE listed equities, MCX commodities, INR currency, and IST market hours unless the user clearly asks for another market.

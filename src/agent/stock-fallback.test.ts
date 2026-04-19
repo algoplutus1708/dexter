@@ -8,6 +8,9 @@ function makeToolResult(data: unknown): string {
 describe('stock fallback', () => {
   test('detects clarification-style answers', () => {
     expect(looksLikeClarificationResponse('Provide me with the stock symbol (ticker) of the company you are interested in.')).toBe(true);
+    expect(looksLikeClarificationResponse("What specific information do you need regarding Reliance Jio's latest share buyback activity?")).toBe(true);
+    expect(looksLikeClarificationResponse('What specific company and document type (e.g., annual report, quarterly results) are you interested in? Please provide the details so I can start the search.')).toBe(true);
+    expect(looksLikeClarificationResponse('Could you please specify which company you are interested in analyzing?')).toBe(true);
     expect(looksLikeClarificationResponse('Here is the analysis.')).toBe(false);
   });
 

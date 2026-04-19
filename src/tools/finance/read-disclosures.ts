@@ -42,7 +42,8 @@ Intelligent meta-tool for reading Indian listed-company disclosures. Takes a nat
 
 ## Usage Notes
 
-- Call ONCE with the complete natural language query
+- Call once per company or filing request; for multi-company queries, make separate calls and compare the results
+- If the user already named the company, ticker, or document type, do not ask for it again; use the fetched disclosure results directly
 - Prioritizes official sources: NSE India, BSE India, and SEBI
 - Searches for India-specific disclosure types like annual reports, quarterly results, shareholding patterns, and corporate announcements
 - If a search provider is unavailable, returns canonical official page URLs you can inspect manually

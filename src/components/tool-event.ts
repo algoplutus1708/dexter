@@ -58,8 +58,24 @@ function approvalLabel(decision: ApprovalDecision): string {
 
 const SPINNER_FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+function defaultActiveMessage(tool: string): string {
+  switch (tool) {
+    case 'get_market_data':
+      return 'Fetching market data...';
+    case 'get_financials':
+      return 'Fetching financial data...';
+    case 'read_disclosures':
+      return 'Searching filings...';
+    case 'web_search':
+      return 'Searching the web...';
+    default:
+      return 'Working...';
+  }
+}
+
 export class ToolEventComponent extends Container {
   private readonly tui: TUI;
+  private readonly toolName: string;
   private readonly header: Text;
   private completedDetails: Text[] = [];
   private activeDetail: Text | null = null;
@@ -69,6 +85,7 @@ export class ToolEventComponent extends Container {
   constructor(tui: TUI, tool: string, args: Record<string, unknown>) {
     super();
     this.tui = tui;
+    this.toolName = tool;
     this.addChild(new Spacer(1));
     const title = `${formatToolName(tool)}${args ? `${theme.muted('(')}${formatArgs(tool, args)}${theme.muted(')')}` : ''}`;
     this.header = new Text(`⏺ ${title}`, 0, 0);
@@ -77,7 +94,7 @@ export class ToolEventComponent extends Container {
 
   setActive(progressMessage?: string) {
     this.clearDetail();
-    const message = progressMessage || 'Searching...';
+    const message = progressMessage || defaultActiveMessage(this.toolName);
     this.activeDetail = new Text(`${theme.muted(`⎿  ${SPINNER_FRAMES[0]}`)} ${message}`, 0, 0);
     this.addChild(this.activeDetail);
     this.spinnerFrame = 0;

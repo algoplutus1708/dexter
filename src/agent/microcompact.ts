@@ -20,7 +20,7 @@ export const COUNT_TRIGGER_THRESHOLD = 8;
 export const COUNT_KEEP_RECENT = 4;
 
 /** Fire when total compactable ToolMessage content exceeds this many estimated tokens. */
-export const TOKEN_TRIGGER_THRESHOLD = 80_000;
+export const TOKEN_TRIGGER_THRESHOLD = 16_000;
 
 /** Tool names whose results can be safely cleared (read-only tools). */
 const COMPACTABLE_TOOLS = new Set([

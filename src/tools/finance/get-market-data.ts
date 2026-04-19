@@ -47,6 +47,10 @@ const GetMarketDataInputSchema = z.object({
     .string()
     .optional()
     .describe('Alias for ticker, accepted for model compatibility.'),
+  tickers: z
+    .union([z.string(), z.array(z.string())])
+    .optional()
+    .describe('Alias for ticker, accepted for model compatibility.'),
   query: z
     .string()
     .optional()
@@ -65,7 +69,13 @@ export function createGetMarketData(_model: string): DynamicStructuredTool {
     schema: GetMarketDataInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
-      const candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+      let candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+      if (!candidate && (input as any).tickers) {
+        candidate = Array.isArray((input as any).tickers) ? (input as any).tickers[0] : (input as any).tickers;
+      }
+      if (typeof candidate === 'string' && candidate.includes(',')) {
+        candidate = candidate.split(',')[0];
+      }
       if (!candidate) {
         return formatToolResult({ error: 'Ticker is required for get_market_data. Provide ticker or symbol.' }, []);
       }

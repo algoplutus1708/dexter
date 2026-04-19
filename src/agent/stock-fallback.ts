@@ -50,14 +50,37 @@ const CLARIFICATION_PATTERNS = [
   /provide me with the stock symbol/i,
   /which stock do you need/i,
   /please provide more details/i,
+  /please provide the details/i,
+  /provide me with the details/i,
+  /details of the company/i,
+  /proceed using the/i,
   /need more context/i,
   /need more context to proceed/i,
+  /what specific information do you need/i,
+  /what details do you need/i,
+  /what information do you need/i,
   /what specific information or analysis are you looking for/i,
+  /what specific company/i,
+  /what specific company and document type/i,
+  /what company and document type/i,
+  /what document type/i,
   /what company or stock/i,
   /which company or stock/i,
+  /which company and document type/i,
   /what stock do you want/i,
   /ticker of the company/i,
   /i need the ticker/i,
+  /can you clarify/i,
+  /please clarify/i,
+  /could you please specify/i,
+  /please specify/i,
+  /i need more information to proceed/i,
+  /would you like me to/i,
+  /do you want me to/i,
+  /what would you like to focus on today/i,
+  /what company are you interested in/i,
+  /which company are you interested in/i,
+  /could you tell me which company/i,
 ];
 
 const STOCK_ANALYSIS_PATTERNS = [
@@ -223,7 +246,7 @@ export function looksLikeClarificationResponse(text: string): boolean {
 }
 
 export function buildClarificationRepairPrompt(query: string, toolResults: string, badResponse: string): string {
-  return `The previous answer was invalid because it asked for clarification after tools had already returned data.
+  return `The previous answer was invalid because it asked for clarification, requested the company or document type again, or changed topics after tools had already returned data.
 
 Original user query:
 ${query}
@@ -234,7 +257,7 @@ ${badResponse}
 Tool results:
 ${toolResults}
 
-Write the final answer directly. Do not ask for the ticker again or request more context. If some data is missing, mention the gap briefly and continue with what you have.`;
+Write the final answer directly using the tool results. Do not ask for more context, do not ask which company or document type again, and do not switch to a different topic. If some data is missing, mention the gap briefly and continue with what you have.`;
 }
 
 export function buildStockAnalysisAnswer(query: string, toolCalls: ToolCallRecord[]): string | null {

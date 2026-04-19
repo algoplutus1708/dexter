@@ -24,10 +24,10 @@ export function estimateTokens(text: string): number {
 // ---------------------------------------------------------------------------
 
 /** Buffer tokens before the context limit to trigger compaction. */
-const AUTOCOMPACT_BUFFER_TOKENS = 13_000;
+const AUTOCOMPACT_BUFFER_TOKENS = 4_000;
 
 /** Reserve tokens for model output during compaction. */
-const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 20_000;
+const MAX_OUTPUT_TOKENS_FOR_SUMMARY = 4_000;
 
 /** Fallback context window when provider doesn't specify one. */
 const DEFAULT_CONTEXT_WINDOW = 128_000;
