@@ -28,22 +28,34 @@ Do NOT use for: financials, ratios, news, disclosures.
 
 Current date: ${getCurrentDate()}
 `.trim();
+function extractTickerCandidate(text: string): string | null {
+  const matches = text.match(/\b[A-Z0-9][A-Z0-9.&:-]{1,}\b/g) ?? [];
+  const tickerLike = matches.find((value) => /[A-Z]/.test(value));
+  return tickerLike ?? null;
+}
 
-// ─── Schema: single ticker string only ─────────────────────────────────────
-// Qwen 2.5 (Ollama) is unreliable with multi-field schemas.
-// Using one field guarantees correct tool-call generation every time.
+// ─── Schema: ticker plus compatibility aliases ────────────────────────────
+// Qwen 2.5 (Ollama) can omit the canonical ticker field, so we accept
+// symbol/query aliases and normalize them before fetching data.
 
 const GetMarketDataInputSchema = z.object({
   ticker: z
     .string()
-    .describe(
-      "Indian stock ticker symbol to look up. Examples: RELIANCE, TATAMOTORS, HDFCBANK, INFY, TCS, SBIN, NIFTY50, SENSEX. Append .NSE or .BSE for explicit exchange (default NSE)."
-    ),
+    .optional()
+    .describe("Indian stock ticker symbol to look up. Examples: RELIANCE, TATAMOTORS, HDFCBANK, INFY, TCS, SBIN, NIFTY50, SENSEX. Append .NSE or .BSE for explicit exchange (default NSE)."),
+  symbol: z
+    .string()
+    .optional()
+    .describe('Alias for ticker, accepted for model compatibility.'),
+  query: z
+    .string()
+    .optional()
+    .describe('Optional natural-language stock query. Used only if ticker/symbol is omitted.'),
 });
 
 /**
  * Fetches live Indian stock price. Priority: Upstox → Yahoo Finance India.
- * Single-field schema for maximum Ollama/Qwen tool-call reliability.
+ * Accepts ticker aliases so Ollama/Qwen tool calls are easier to recover.
  */
 export function createGetMarketData(_model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
@@ -53,7 +65,12 @@ export function createGetMarketData(_model: string): DynamicStructuredTool {
     schema: GetMarketDataInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
-      const ticker = normalizeIndianTicker(input.ticker);
+      const candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+      if (!candidate) {
+        return formatToolResult({ error: 'Ticker is required for get_market_data. Provide ticker or symbol.' }, []);
+      }
+
+      const ticker = normalizeIndianTicker(candidate);
       onProgress?.(`Fetching live price for ${ticker}...`);
 
       // Priority 1: Upstox (real-time authenticated Indian data)

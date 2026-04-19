@@ -1,6 +1,6 @@
 import { AIMessage, AIMessageChunk, SystemMessage, HumanMessage, ToolMessage, type BaseMessage } from '@langchain/core/messages';
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { callLlmWithMessages, streamLlmWithMessages } from '../model/llm.js';
+import { callLlm, callLlmWithMessages, streamLlmWithMessages } from '../model/llm.js';
 import { getTools, getToolConcurrencyMap } from '../tools/registry.js';
 import { buildSystemPrompt, loadSoulDocument, loadRulesDocument } from './prompts.js';
 import { extractTextContent, hasToolCalls } from '../utils/ai-message.js';
@@ -18,6 +18,7 @@ import { AgentToolExecutor } from './tool-executor.js';
 import { MemoryManager } from '../memory/index.js';
 import { runMemoryFlush, shouldRunMemoryFlush } from '../memory/flush.js';
 import { resolveProvider } from '../providers.js';
+import { buildClarificationRepairPrompt, buildStockAnalysisAnswer, buildStockAnalysisFallback, looksLikeClarificationResponse } from './stock-fallback.js';
 
 const DEFAULT_MODEL = 'gpt-5.4';
 const DEFAULT_MAX_ITERATIONS = 10;
@@ -189,6 +190,44 @@ export class Agent {
 
       // No tool calls = final answer
       if (!hasToolCalls(response)) {
+        const toolRecords = ctx.scratchpad.getToolCallRecords();
+
+        const stockFallback = buildStockAnalysisFallback(query, toolRecords, responseText ?? '');
+        if (stockFallback) {
+          yield* this.handleDirectResponse(stockFallback, ctx);
+          return;
+        }
+
+        if (responseText && looksLikeClarificationResponse(responseText) && toolRecords.length > 0) {
+          try {
+            const repair = await callLlm(
+              buildClarificationRepairPrompt(query, ctx.scratchpad.getToolResults(), responseText),
+              {
+                model: this.model,
+                systemPrompt: this.systemPrompt,
+                signal: this.signal,
+              },
+            );
+
+            const repairedText = typeof repair.response === 'string'
+              ? repair.response.trim()
+              : extractTextContent(repair.response)?.trim() ?? '';
+
+            const repairedStockFallback = buildStockAnalysisFallback(query, toolRecords, repairedText);
+            if (repairedStockFallback) {
+              yield* this.handleDirectResponse(repairedStockFallback, ctx);
+              return;
+            }
+
+            if (repairedText && !looksLikeClarificationResponse(repairedText)) {
+              yield* this.handleDirectResponse(repairedText, ctx);
+              return;
+            }
+          } catch {
+            // Fall back to the model's original answer below.
+          }
+        }
+
         yield* this.handleDirectResponse(responseText ?? '', ctx);
         return;
       }
@@ -217,6 +256,12 @@ export class Agent {
       toolMessages = enforceResultBudget(toolMessages);
 
       messages.push(...toolMessages);
+
+      const stockAnswer = buildStockAnalysisAnswer(query, ctx.scratchpad.getToolCallRecords());
+      if (stockAnswer) {
+        yield* this.handleDirectResponse(stockAnswer, ctx);
+        return;
+      }
 
       // Ollama/Qwen fix: inject explicit synthesis prompt after tool results.
       // ChatOllama does not reliably surface ToolMessage content back to the
