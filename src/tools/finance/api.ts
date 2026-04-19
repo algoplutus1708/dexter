@@ -2,11 +2,10 @@ import { readCache, writeCache, describeRequest } from '../../utils/cache.js';
 import { logger } from '../../utils/logger.js';
 
 function getBaseUrl(): string {
-  return (
-    process.env.FINANCE_API_BASE_URL ||
-    process.env.INDIA_MARKET_API_BASE_URL ||
-    'https://api.financialdatasets.ai'
-  );
+  if (process.env.FINANCE_API_BASE_URL) return process.env.FINANCE_API_BASE_URL;
+  if (process.env.INDIA_MARKET_API_BASE_URL) return process.env.INDIA_MARKET_API_BASE_URL;
+  
+  throw new Error('Indian Financial Data Provider is not configured. Please add FINANCE_API_BASE_URL and INDIA_MARKET_API_KEY to your .env file to enable advanced Indian stock screening and fundamentals.');
 }
 
 export interface ApiResponse {

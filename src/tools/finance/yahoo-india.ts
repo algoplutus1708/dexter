@@ -62,9 +62,7 @@ function lastDefined<T>(values: Array<T | null | undefined> | undefined): T | un
 export function hasStructuredFinanceProvider(): boolean {
   return Boolean(
     process.env.FINANCE_API_BASE_URL ||
-    process.env.INDIA_MARKET_API_BASE_URL ||
-    process.env.INDIA_MARKET_API_KEY ||
-    process.env.FINANCIAL_DATASETS_API_KEY,
+    process.env.INDIA_MARKET_API_BASE_URL
   );
 }
 
