@@ -19,7 +19,6 @@ import { MemoryManager } from '../memory/index.js';
 import { runMemoryFlush, shouldRunMemoryFlush } from '../memory/flush.js';
 import { resolveProvider } from '../providers.js';
 
-
 const DEFAULT_MODEL = 'gpt-5.4';
 const DEFAULT_MAX_ITERATIONS = 10;
 const MAX_OVERFLOW_RETRIES = 2;
@@ -219,6 +218,28 @@ export class Agent {
 
       messages.push(...toolMessages);
 
+      // Ollama/Qwen fix: inject explicit synthesis prompt after tool results.
+      // ChatOllama does not reliably surface ToolMessage content back to the
+      // model on the next turn, so Qwen asks clarifying questions instead of
+      // presenting the data. Injecting a HumanMessage with the raw results
+      // and the original query forces correct synthesis every time.
+      if (resolveProvider(this.model).id === 'ollama' && toolMessages.length > 0) {
+        const resultSummaries = toolMessages.map((tm) => {
+          const content = typeof tm.content === 'string' ? tm.content : JSON.stringify(tm.content);
+          // Parse and re-stringify for readability, trim to avoid token overflow
+          let readable = content;
+          try {
+            const parsed = JSON.parse(content);
+            readable = JSON.stringify(parsed, null, 2);
+          } catch { /* keep raw */ }
+          return `[${tm.name ?? 'tool'} result]:\n${readable.slice(0, 4000)}`;
+        }).join('\n\n');
+
+        messages.push(new HumanMessage(
+          `The tools returned the following data. Use it to answer the user's question: "${query}"\n\nDo NOT ask for clarification. Present the data immediately.\n\n${resultSummaries}`
+        ));
+      }
+
       if (denied) {
         const totalTime = Date.now() - ctx.startTime;
         yield {
@@ -275,6 +296,10 @@ export class Agent {
   private async callModelWithStreaming(
     messages: BaseMessage[],
   ): Promise<{ response: AIMessage; usage?: TokenUsage }> {
+    // DEBUG HACK: Dump exact payload to console
+    const fs = require('fs');
+    fs.appendFileSync('qwen_payload_debug.json', JSON.stringify(messages, null, 2) + '\n\n');
+    
     try {
       return await this.streamAndAccumulate(messages);
     } catch {

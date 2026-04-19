@@ -1,224 +1,146 @@
-import { DynamicStructuredTool, StructuredToolInterface } from '@langchain/core/tools';
+import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { RunnableConfig } from '@langchain/core/runnables';
-import { AIMessage, ToolCall } from '@langchain/core/messages';
 import { z } from 'zod';
-import { callLlm } from '../../model/llm.js';
 import { formatToolResult } from '../types.js';
-import { getCurrentDate } from '../../agent/prompts.js';
-import { withTimeout, SUB_TOOL_TIMEOUT_MS } from './utils.js';
-import { FINANCIAL_FORMATTERS } from './formatters.js';
 import { describeIndianTickerFormat } from './india-market.js';
-
-/**
- * Rich description for the get_financials tool.
- * Used in the system prompt to guide the LLM on when and how to use this tool.
- */
-export const GET_FINANCIALS_DESCRIPTION = `
-Intelligent meta-tool for retrieving Indian company financial data. Takes a natural language query and automatically routes to appropriate financial data sources.
-
-## When to Use
-
-- Company facts (sector, industry, market cap, number of employees, listing date, exchange, location, weighted average shares, website)
-- Company financials (income statements, balance sheets, cash flow statements)
-- Financial metrics and key ratios (P/E ratio, market cap, EPS, dividend yield, enterprise value, ROE, ROA, margins)
-- Historical metrics and trend analysis across multiple periods
-- Analyst estimates and price targets
-- Revenue segment breakdowns
-- Earnings data (EPS/revenue beat-miss, earnings surprises)
-- Multi-company comparisons (pass the full query, it handles routing internally)
-
-## When NOT to Use
-
-- Stock, index, or commodity prices (use get_market_data instead)
-- Company news or insider trading activity (use get_market_data instead)
-- General web searches or non-financial topics (use web_search instead)
-- Questions that don't require external financial data (answer directly from knowledge)
-- Non-public company information
-- Real-time trading or order execution
-- Reading exchange or SEBI disclosure content (use read_disclosures instead)
-- Stock screening by criteria (use stock_screener)
-
-## Usage Notes
-
-- Call ONCE with the complete natural language query - the tool handles complexity internally
-- For comparisons like "compare RELIANCE vs TCS revenue", pass the full query as-is
-- Handles ticker resolution automatically for Indian market identifiers. ${describeIndianTickerFormat()}
-- Handles date inference (e.g., "last quarter", "past 5 years", "YTD")
-- Returns structured JSON data with source URLs for verification
-`.trim();
-
-/** Format snake_case tool name to Title Case for progress messages */
-function formatSubToolName(name: string): string {
-  return name.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-}
-
-// Import all finance tools directly (avoid circular deps with index.ts)
-import { getIncomeStatements, getBalanceSheets, getCashFlowStatements, getAllFinancialStatements } from './fundamentals.js';
-import { getKeyRatios, getHistoricalKeyRatios } from './key-ratios.js';
-import { getAnalystEstimates } from './estimates.js';
-import { getSegmentedRevenues } from './segments.js';
-import { getEarnings } from './earnings.js';
-
-// All finance tools available for routing
-const FINANCE_TOOLS: StructuredToolInterface[] = [
-  // Fundamentals
+import { withTimeout, SUB_TOOL_TIMEOUT_MS } from './utils.js';
+import {
   getIncomeStatements,
   getBalanceSheets,
   getCashFlowStatements,
   getAllFinancialStatements,
-  // Earnings
-  getEarnings,
-  // Key Ratios, Snapshots & Estimates
-  getKeyRatios,
-  getHistoricalKeyRatios,
-  getAnalystEstimates,
-  // Other Data
-  getSegmentedRevenues,
-];
+} from './fundamentals.js';
+import { getKeyRatios } from './key-ratios.js';
+import { getAnalystEstimates } from './estimates.js';
+import { getSegmentedRevenues } from './segments.js';
+import { getEarnings } from './earnings.js';
 
-// Create a map for quick tool lookup by name
-const FINANCE_TOOL_MAP = new Map(FINANCE_TOOLS.map(t => [t.name, t]));
+export const GET_FINANCIALS_DESCRIPTION = `
+Fetches authentic Indian company financial data from Screener.in (income statements, balance sheets, cash flows, key ratios).
+Use for: P&L, revenue, net profit, EPS, ROE, margins, debt, cash flow.
+Do NOT use for: live prices (use get_market_data), news (use web_search), exchange filings (use read_disclosures).
+Defaults to all_statements for broad stock-analysis prompts.
+`.trim();
 
-// Build the router system prompt - simplified since LLM sees tool schemas
-function buildRouterPrompt(): string {
-  return `You are a financial data routing assistant.
-Current date: ${getCurrentDate()}
-
-Given a user's natural language query about financial data, call the appropriate financial tool(s).
-
-## Guidelines
-
-1. **Ticker Resolution**: Convert company names to Indian market identifiers:
-   - Reliance → RELIANCE.NSE, TCS → TCS.NSE, Infosys → INFY.NSE, HDFC Bank → HDFCBANK.NSE
-   - If the exchange is omitted, default to NSE unless the query clearly specifies BSE
-
-2. **Date Inference**: Use schema-supported filters for date ranges:
-   - "last year" → report_period_gte 1 year ago
-   - "last quarter" → report_period_gte 3 months ago
-   - "past 5 years" → report_period_gte 5 years ago and limit 5 (annual) or 20 (quarterly)
-   - "YTD" → report_period_gte Jan 1 of current year
-
-3. **Tool Selection**:
-   - For latest financial metrics snapshot (P/E, margins, ROE, EPS, growth rates) → get_key_ratios
-   - For historical P/E ratio, historical market cap, valuation metrics over time → get_key_ratios
-   - For revenue, earnings, profitability → get_income_statements
-   - For latest quarterly/annual results snapshot, beat-miss, and estimate comparisons → get_earnings
-   - For debt, assets, equity → get_balance_sheets
-   - For cash flow, free cash flow → get_cash_flow_statements
-   - For comprehensive analysis → get_all_financial_statements
-   - Assume INR is the default user-facing currency unless the user specifies otherwise
-
-4. **Efficiency**:
-   - Prefer specific tools over general ones when possible
-   - Use get_all_financial_statements only when multiple statement types needed
-   - For comparisons between companies, call the same tool for each ticker
-   - Always use the smallest limit that can answer the question:
-     - Point-in-time/latest questions → limit 1
-     - Short trend (2-3 periods) → limit 3
-     - Medium trend (4-5 periods) → limit 5
-   - Increase limit beyond defaults only when the user explicitly asks for long history (e.g., 10-year trend)
-
-Call the appropriate tool(s) now.`;
+function extractTickerCandidate(text: string): string | null {
+  const matches = text.match(/\b[A-Z0-9][A-Z0-9.&:-]{1,}\b/g) ?? [];
+  const tickerLike = matches.find((value) => /[A-Z]/.test(value));
+  return tickerLike ?? null;
 }
 
-// Input schema for the get_financials tool
 const GetFinancialsInputSchema = z.object({
-  query: z.string().describe('Natural language query about financial data'),
+  ticker: z
+    .string()
+    .optional()
+    .describe(
+      `Indian listed company ticker. ${describeIndianTickerFormat()} Examples: RELIANCE, TCS, HDFCBANK, INFY, TATAMOTORS, WIPRO, SBIN, ITC.`
+    ),
+  symbol: z
+    .string()
+    .optional()
+    .describe('Alias for ticker, accepted for model compatibility.'),
+  query: z
+    .string()
+    .optional()
+    .describe('Optional natural-language stock analysis request. Used only if ticker/symbol is omitted.'),
+  metric_groups: z
+    .array(z.string())
+    .optional()
+    .describe('Optional metric groups requested by the model, such as valuation, growth, margins, cash_flow, and debt.'),
+  data_type: z
+    .enum([
+      'income_statements',
+      'balance_sheets',
+      'cash_flow_statements',
+      'all_statements',
+      'key_ratios',
+      'earnings',
+    ])
+    .default('all_statements')
+    .describe(
+      "What to fetch: 'income_statements' (revenue/profit/EPS), 'balance_sheets' (assets/liabilities/equity), 'cash_flow_statements' (FCF/OCF), 'all_statements' (all three combined, default), 'key_ratios' (P/E, ROE, margins), 'earnings' (latest quarterly results)."
+    ),
+  period: z
+    .enum(['annual', 'quarterly'])
+    .default('annual')
+    .describe("Reporting period. Use 'quarterly' for recent quarter data, 'annual' for full-year trends."),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(20)
+    .default(4)
+    .describe('Number of periods to return (default 4). Use 8+ for multi-year trends.'),
 });
 
+type GetFinancialsInput = z.infer<typeof GetFinancialsInputSchema>;
+
+function resolveTicker(input: GetFinancialsInput): string {
+  const candidate = input.ticker ?? input.symbol ?? (input.query ? extractTickerCandidate(input.query) : null);
+
+  if (!candidate) {
+    throw new Error('Ticker is required for get_financials. Provide ticker or symbol.');
+  }
+
+  return candidate.trim().toUpperCase();
+}
+
+const asString = (p: Promise<unknown>): Promise<string> =>
+  p.then((r) => (typeof r === 'string' ? r : JSON.stringify(r)));
+
+async function dispatch(input: GetFinancialsInput): Promise<string> {
+  const ticker = resolveTicker(input);
+  const { data_type, period, limit } = input;
+  const baseArgs = { ticker, period, limit };
+  // Segments tool only supports annual/quarterly (no ttm)
+  const segmentPeriod: 'annual' | 'quarterly' = period === 'annual' ? 'annual' : 'quarterly';
+
+  switch (data_type) {
+    case 'income_statements':
+      return withTimeout(asString(getIncomeStatements.invoke(baseArgs)), SUB_TOOL_TIMEOUT_MS, 'income_statements');
+    case 'balance_sheets':
+      return withTimeout(asString(getBalanceSheets.invoke(baseArgs)), SUB_TOOL_TIMEOUT_MS, 'balance_sheets');
+    case 'cash_flow_statements':
+      return withTimeout(asString(getCashFlowStatements.invoke(baseArgs)), SUB_TOOL_TIMEOUT_MS, 'cash_flow_statements');
+    case 'all_statements':
+      return withTimeout(asString(getAllFinancialStatements.invoke(baseArgs)), SUB_TOOL_TIMEOUT_MS, 'all_statements');
+    case 'key_ratios':
+      return withTimeout(asString(getKeyRatios.invoke({ ticker })), SUB_TOOL_TIMEOUT_MS, 'key_ratios');
+    case 'earnings':
+      return withTimeout(asString(getEarnings.invoke({ ticker })), SUB_TOOL_TIMEOUT_MS, 'earnings');
+    default:
+      throw new Error(`Unknown data_type: ${data_type}`);
+  }
+}
+
 /**
- * Create a get_financials tool configured with the specified model.
- * Uses native LLM tool calling for routing queries to finance tools.
+ * Deterministic financial data fetcher for Indian equities.
+ *
+ * Uses a simple 2-field schema (ticker + data_type enum) so Qwen 2.5 / Ollama
+ * always generates valid tool calls. No nested LLM routing — dispatches directly
+ * to Screener.in browser scrapers and financial API sub-tools.
  */
-export function createGetFinancials(model: string): DynamicStructuredTool {
+export function createGetFinancials(_model: string): DynamicStructuredTool {
   return new DynamicStructuredTool({
     name: 'get_financials',
-    description: `Intelligent meta-tool for retrieving Indian company financial data. Takes a natural language query and automatically routes to appropriate financial data tools. Use for:
-- Company financials (income statements, balance sheets, cash flow)
-- Financial metrics and key ratios (P/E ratio, market cap, EPS, dividend yield, ROE, margins)
-- Historical metrics and trend analysis
-- Analyst estimates and price targets
-- Earnings data and revenue segments`,
+    description:
+      "Fetches Indian company financial data from Screener.in. Pass ticker or symbol + data_type. data_type options: 'income_statements' (revenue/profit/EPS/margins), 'balance_sheets' (assets/debt/equity), 'cash_flow_statements' (OCF/FCF), 'all_statements' (all three, default), 'key_ratios' (P/E/ROE/dividend yield), 'earnings' (latest quarterly results).",
     schema: GetFinancialsInputSchema,
     func: async (input, _runManager, config?: RunnableConfig) => {
       const onProgress = config?.metadata?.onProgress as ((msg: string) => void) | undefined;
-
-      // 1. Call LLM with finance tools bound (native tool calling)
-      onProgress?.('Fetching...');
-      const { response } = await callLlm(input.query, {
-        model,
-        systemPrompt: buildRouterPrompt(),
-        tools: FINANCE_TOOLS,
-      });
-      const aiMessage = response as AIMessage;
-
-      // 2. Check for tool calls
-      const toolCalls = aiMessage.tool_calls as ToolCall[];
-      if (!toolCalls || toolCalls.length === 0) {
-        return formatToolResult({ error: 'No tools selected for query' }, []);
+      const ticker = resolveTicker(input);
+      onProgress?.(`Fetching ${input.data_type} for ${ticker} from Screener.in...`);
+      try {
+        return await dispatch(input);
+      } catch (error) {
+        return formatToolResult(
+          {
+            error: `Failed to fetch ${input.data_type} for ${ticker}`,
+            details: error instanceof Error ? error.message : String(error),
+          },
+          [],
+        );
       }
-
-      // 3. Execute tool calls in parallel
-      const toolNames = [...new Set(toolCalls.map(tc => formatSubToolName(tc.name)))];
-      onProgress?.(`Fetching from ${toolNames.join(', ')}...`);
-      const results = await Promise.all(
-        toolCalls.map(async (tc) => {
-          try {
-            const tool = FINANCE_TOOL_MAP.get(tc.name);
-            if (!tool) {
-              throw new Error(`Tool '${tc.name}' not found`);
-            }
-            const rawResult = await withTimeout(tool.invoke(tc.args), SUB_TOOL_TIMEOUT_MS, tc.name);
-            const result = typeof rawResult === 'string' ? rawResult : JSON.stringify(rawResult);
-            const parsed = JSON.parse(result);
-            return {
-              tool: tc.name,
-              args: tc.args,
-              data: parsed.data,
-              sourceUrls: parsed.sourceUrls || [],
-              error: null,
-            };
-          } catch (error) {
-            return {
-              tool: tc.name,
-              args: tc.args,
-              data: null,
-              sourceUrls: [],
-              error: error instanceof Error ? error.message : String(error),
-            };
-          }
-        })
-      );
-
-      // 4. Combine results
-      const successfulResults = results.filter((r) => r.error === null);
-      const failedResults = results.filter((r) => r.error !== null);
-
-      // Collect all source URLs
-      const allUrls = results.flatMap((r) => r.sourceUrls);
-
-      // Build combined data structure
-      const combinedData: Record<string, unknown> = {};
-
-      for (const result of successfulResults) {
-        const ticker = (result.args as Record<string, unknown>).ticker as string | undefined;
-        const key = ticker ? `${result.tool}_${ticker}` : result.tool;
-        const formatter = FINANCIAL_FORMATTERS[result.tool];
-        combinedData[key] = formatter
-          ? formatter(result.data, result.args as Record<string, unknown>)
-          : result.data;
-      }
-
-      // Add errors if any
-      if (failedResults.length > 0) {
-        combinedData._errors = failedResults.map((r) => ({
-          tool: r.tool,
-          args: r.args,
-          error: r.error,
-        }));
-      }
-
-      return formatToolResult(combinedData, allUrls);
     },
   });
 }

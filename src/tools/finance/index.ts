@@ -7,6 +7,6 @@ export { getOptionContracts, getOptionChain } from './options.js';
 export { getInsiderTrades } from './insider_trades.js';
 export { getEarnings } from './earnings.js';
 export { createGetFinancials } from './get-financials.js';
-export { createGetMarketData } from './get-market-data.js';
+export { createGetMarketData, getHistoricalIndianPrices } from './get-market-data.js';
 export { createReadDisclosures, createReadFilings, READ_DISCLOSURES_DESCRIPTION } from './read-disclosures.js';
 export { createScreenStocks } from './screen-stocks.js';

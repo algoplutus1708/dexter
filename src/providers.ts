@@ -83,6 +83,29 @@ export const PROVIDERS: ProviderDef[] = [
   },
 ];
 
+/**
+ * Additional model name patterns that resolve to Ollama (no prefix in model name).
+ * These are bare Ollama model names that don't start with 'ollama:' prefix.
+ */
+const OLLAMA_MODEL_PATTERNS = [
+  /^qwen/i,
+  /^llama/i,
+  /^mistral/i,
+  /^mixtral/i,
+  /^deepseek-r/i,
+  /^phi/i,
+  /^gemma/i,
+  /^vicuna/i,
+  /^codellama/i,
+  /^dolphin/i,
+  /^orca/i,
+  /^neural/i,
+  /^stablelm/i,
+  /^tinyllama/i,
+  /^solar/i,
+  /^yi/i,
+];
+
 const defaultProvider = PROVIDERS.find((p) => p.id === 'openai')!;
 
 /**
@@ -92,7 +115,9 @@ const defaultProvider = PROVIDERS.find((p) => p.id === 'openai')!;
 export function resolveProvider(modelName: string): ProviderDef {
   return (
     PROVIDERS.find((p) => p.modelPrefix && modelName.startsWith(p.modelPrefix)) ??
-    defaultProvider
+    (OLLAMA_MODEL_PATTERNS.some((re) => re.test(modelName))
+      ? PROVIDERS.find((p) => p.id === 'ollama')!
+      : defaultProvider)
   );
 }
 

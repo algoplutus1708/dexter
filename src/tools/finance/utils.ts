@@ -3,7 +3,7 @@
  */
 
 /** Sub-tool timeout in milliseconds. Returns partial results on timeout. */
-export const SUB_TOOL_TIMEOUT_MS = 15_000;
+export const SUB_TOOL_TIMEOUT_MS = 30_000;
 
 /** Cache TTL constants. */
 export const TTL_15M = 15 * 60 * 1000;

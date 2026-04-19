@@ -1,5 +1,5 @@
 import { StructuredToolInterface } from '@langchain/core/tools';
-import { createGetFinancials, createGetMarketData, createReadDisclosures, createScreenStocks } from './finance/index.js';
+import { createGetFinancials, createGetMarketData, getHistoricalIndianPrices, createReadDisclosures, createScreenStocks } from './finance/index.js';
 import { exaSearch, perplexitySearch, tavilySearch, WEB_SEARCH_DESCRIPTION, xSearchTool, X_SEARCH_DESCRIPTION } from './search/index.js';
 import { skillTool, SKILL_TOOL_DESCRIPTION } from './skill.js';
 import { webFetchTool, WEB_FETCH_DESCRIPTION } from './fetch/web-fetch.js';
@@ -52,7 +52,14 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       name: 'get_market_data',
       tool: createGetMarketData(model),
       description: GET_MARKET_DATA_DESCRIPTION,
-      compactDescription: 'Indian stock/index prices, company news, and insider/promoter trades. Handles multi-asset queries in one call.',
+      compactDescription: 'Fetch live Indian stock/index price snapshot (open, high, low, close, volume, market cap). Pass just the ticker symbol.',
+      concurrencySafe: true,
+    },
+    {
+      name: 'get_historical_prices',
+      tool: getHistoricalIndianPrices,
+      description: 'Fetches historical OHLCV price data for an Indian stock over a date range.',
+      compactDescription: 'Historical Indian stock prices (OHLCV) over a date range. Pass ticker + start_date + end_date.',
       concurrencySafe: true,
     },
     {

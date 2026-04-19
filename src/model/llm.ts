@@ -114,12 +114,21 @@ const MODEL_FACTORIES: Record<string, ModelFactory> = {
         baseURL: 'https://api.deepseek.com',
       },
     }),
-  ollama: (name, opts) =>
-    new ChatOllama({
-      model: name.replace(/^ollama:/, ''),
+  ollama: (name, opts) => {
+    const rawName = name.replace(/^ollama:/, '');
+    const baseURL = process.env.OLLAMA_BASE_URL
+      ? process.env.OLLAMA_BASE_URL.replace(/\/+$/, '') + '/v1'
+      : 'http://127.0.0.1:11434/v1';
+    
+    return new ChatOpenAI({
+      model: rawName,
       ...opts,
-      ...(process.env.OLLAMA_BASE_URL ? { baseUrl: process.env.OLLAMA_BASE_URL } : {}),
-    }),
+      apiKey: 'ollama', // Any string works for local Ollama
+      configuration: {
+        baseURL: baseURL,
+      },
+    });
+  },
 };
 
 const DEFAULT_FACTORY: ModelFactory = (name, opts) =>

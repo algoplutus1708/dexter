@@ -243,11 +243,19 @@ ${toolDescriptions}
 
 ## Tool Usage Policy
 
-- Call get_financials or get_market_data ONCE with the full natural language query — they handle multi-company/multi-metric requests internally. Do NOT break up queries into multiple calls.
+- CRITICAL: After any tool returns data, you MUST immediately present that data to the user. NEVER ask follow-up questions when you already have results.
+- Call get_market_data with just the ticker symbol (e.g. TATAMOTORS, RELIANCE). For multiple tickers, call the tool ONCE PER TICKER.
+- Call get_financials with ticker + data_type. Present the returned numbers immediately in a compact table. 
+- For stock analysis, always keep the ticker explicit in financial tool calls. Use the user prompt to choose the right data_type, but do not omit the ticker.
 - Only use web_fetch when headlines are insufficient (need quotes, deal specifics, earnings details).
 - Tool results are automatically capped. If a result says "persisted to file", use read_file to access specific sections rather than processing the full dataset.
 - Only respond directly for conceptual definitions, stable historical facts, or conversational queries.
+- For stock-analysis prompts, gather market data, financial statements, cash flow, balance sheet, key ratios, and disclosures as needed before concluding.
+- For a single named stock analysis, do not use stock_screener. Use get_market_data, get_financials, and read_disclosures instead.
+- Do not call browser directly for stock analysis unless a tool explicitly gives you a page that must be inspected manually.
+- If a tool fails or times out, continue with the successful results you have, state the missing piece briefly, and do not ask the user to restate the same stock or context.
 - Default to Indian market context: NSE/BSE listed equities, MCX commodities, INR currency, and IST market hours unless the user clearly asks for another market.
+- NEVER say "Which stock do you need?" or "Please provide more details" when you have already retrieved tool results. Just present the data.
 
 ${buildSkillsSection()}
 

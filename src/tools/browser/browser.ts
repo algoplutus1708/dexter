@@ -173,9 +173,10 @@ const TABLE_TITLE_FALLBACKS: Record<string, string[]> = {
 
 export async function ensureBrowser(): Promise<Page> {
   if (!browser) {
-    // Keep headless: false for debugging, but add args to strip automation flags
+    // Run headless by default so tool calls do not open a visible browser window.
+    // Set DEXTER_BROWSER_HEADFUL=1 when you need to debug the page manually.
     browser = await chromium.launch({ 
-      headless: false,
+      headless: process.env.DEXTER_BROWSER_HEADFUL === '1' ? false : true,
       args: ['--disable-blink-features=AutomationControlled']
     });
   }
@@ -425,8 +426,8 @@ export const browserTool = new DynamicStructuredTool({
             return formatToolResult({ error: 'url is required for navigate action' });
           }
           const p = await ensureBrowser();
-          // Use networkidle for better JS rendering on dynamic sites
-          await p.goto(url, { timeout: 30000, waitUntil: 'networkidle' });
+          // Load the page as soon as the DOM is ready; snapshot/read will wait for content.
+          await p.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' });
           return formatToolResult({
             ok: true,
             url: p.url(),
@@ -442,7 +443,7 @@ export const browserTool = new DynamicStructuredTool({
           const currentPage = await ensureBrowser();
           const context = currentPage.context();
           const newPage = await context.newPage();
-          await newPage.goto(url, { timeout: 30000, waitUntil: 'networkidle' });
+          await newPage.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' });
           // Switch to the new page
           page = newPage;
           return formatToolResult({

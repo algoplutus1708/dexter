@@ -464,7 +464,7 @@ async function fetchFundamentals(
   const page = await ensureBrowser();
 
   try {
-    await page.goto(url, { timeout: 30000, waitUntil: 'networkidle' });
+    await page.goto(url, { timeout: 30000, waitUntil: 'domcontentloaded' });
 
     const { tables: extractedTables } = await extractTablesFromPage(page, [...SCREENER_TABLE_SELECTORS]);
     const tables = extractedTables
