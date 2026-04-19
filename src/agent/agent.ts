@@ -296,10 +296,6 @@ export class Agent {
   private async callModelWithStreaming(
     messages: BaseMessage[],
   ): Promise<{ response: AIMessage; usage?: TokenUsage }> {
-    // DEBUG HACK: Dump exact payload to console
-    const fs = require('fs');
-    fs.appendFileSync('qwen_payload_debug.json', JSON.stringify(messages, null, 2) + '\n\n');
-    
     try {
       return await this.streamAndAccumulate(messages);
     } catch {

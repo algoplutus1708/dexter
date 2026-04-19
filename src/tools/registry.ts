@@ -1,5 +1,6 @@
 import { StructuredToolInterface } from '@langchain/core/tools';
 import { createGetFinancials, createGetMarketData, getHistoricalIndianPrices, createReadDisclosures, createScreenStocks } from './finance/index.js';
+import { hasStructuredFinanceProvider } from './finance/yahoo-india.js';
 import { exaSearch, perplexitySearch, tavilySearch, WEB_SEARCH_DESCRIPTION, xSearchTool, X_SEARCH_DESCRIPTION } from './search/index.js';
 import { skillTool, SKILL_TOOL_DESCRIPTION } from './skill.js';
 import { webFetchTool, WEB_FETCH_DESCRIPTION } from './fetch/web-fetch.js';
@@ -67,13 +68,6 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: createReadDisclosures(model),
       description: READ_DISCLOSURES_DESCRIPTION,
       compactDescription: 'Indian exchange and SEBI disclosures. Finds annual reports, results, shareholding, and announcements.',
-      concurrencySafe: true,
-    },
-    {
-      name: 'stock_screener',
-      tool: createScreenStocks(model),
-      description: SCREEN_STOCKS_DESCRIPTION,
-      compactDescription: 'Screen stocks by financial criteria (P/E, growth, margins, etc.).',
       concurrencySafe: true,
     },
     {
@@ -171,6 +165,16 @@ export function getToolRegistry(model: string): RegisteredTool[] {
       tool: tavilySearch,
       description: WEB_SEARCH_DESCRIPTION,
       compactDescription: 'Search the web for current information. Returns titles, URLs, and snippets.',
+      concurrencySafe: true,
+    });
+  }
+
+  if (hasStructuredFinanceProvider()) {
+    tools.push({
+      name: 'stock_screener',
+      tool: createScreenStocks(model),
+      description: SCREEN_STOCKS_DESCRIPTION,
+      compactDescription: 'Screen stocks by financial criteria (P/E, growth, margins, etc.).',
       concurrencySafe: true,
     });
   }
