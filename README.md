@@ -1,3 +1,5 @@
+**Created by Swastick**
+
 # Dexter 🤖
 
 Dexter is an autonomous financial research agent that thinks, plans, and learns as it works. It performs analysis using task planning, self-reflection, and real-time market data. This version is geared toward live market research with support for global LLM providers, CLI workflows, WhatsApp delivery, and India-market data flows.
